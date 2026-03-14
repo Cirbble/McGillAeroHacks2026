@@ -490,7 +490,12 @@ export default function AdminDashboard() {
                                 </div>
                                 <div style={{ marginBottom: 16 }}>
                                     <label className="form-label">Current Location</label>
-                                    <input className="form-input" required value={droneForm.location} onChange={e => setDroneForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. Chibougamau Hub" />
+                                    <select className="form-input" required value={droneForm.location} onChange={e => setDroneForm(f => ({ ...f, location: e.target.value }))}>
+                                        <option value="">Select a distribution centre…</option>
+                                        {stations.filter(s => s.type === 'distribution').map(s => (
+                                            <option key={s.id} value={s.id}>{s.id}</option>
+                                        ))}
+                                    </select>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
                                     <div>
