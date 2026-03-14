@@ -56,7 +56,7 @@ function findStationMatch(label, stations) {
 function getDroneMapPositions(drones, stations, lines) {
     const stationsById = Object.fromEntries(stations.map(s => [s.id, s]));
     return drones
-        .filter(d => d.status === 'on_route' && d.target_location)
+        .filter(d => (d.status === 'on_route' || d.status === 'relocating') && d.target_location)
         .map(drone => {
             const target = findStationMatch(drone.target_location, stations);
             if (!target) return null;
@@ -80,6 +80,20 @@ function getDroneMapPositions(drones, stations, lines) {
             };
         })
         .filter(Boolean);
+}
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.asin(Math.sqrt(a));
+}
+
+function formatMinutes(minutes) {
+    if (minutes < 60) return `${minutes} min`;
+    const h = Math.floor(minutes / 60), m = minutes % 60;
+    return m > 0 ? `${h}h ${m}min` : `${h}h`;
 }
 
 function buildRouteCoordinates(delivery, stations) {
@@ -165,28 +179,35 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], 
             });
 
             // In-transit drone markers
-            const droneSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><line x1="14" y1="14" x2="5" y2="5" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="5" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="5" y2="23" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="23" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/><circle cx="5" cy="5" r="3.5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><circle cx="23" cy="5" r="3.5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><circle cx="5" cy="23" r="3.5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><circle cx="23" cy="23" r="3.5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><circle cx="14" cy="14" r="4.5" fill="#f59e0b" stroke="white" stroke-width="2"/></svg>`;
+            const makeDroneSvg = (color) => `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><line x1="14" y1="14" x2="5" y2="5" stroke="${color}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="5" stroke="${color}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="5" y2="23" stroke="${color}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="23" stroke="${color}" stroke-width="2" stroke-linecap="round"/><circle cx="5" cy="5" r="3.5" fill="none" stroke="${color}" stroke-width="1.5"/><circle cx="23" cy="5" r="3.5" fill="none" stroke="${color}" stroke-width="1.5"/><circle cx="5" cy="23" r="3.5" fill="none" stroke="${color}" stroke-width="1.5"/><circle cx="23" cy="23" r="3.5" fill="none" stroke="${color}" stroke-width="1.5"/><circle cx="14" cy="14" r="4.5" fill="${color}" stroke="white" stroke-width="2"/></svg>`;
             dronePositions.forEach(({ lat, lng, drone, tooltip }) => {
+                const isRelocating = drone.status === 'relocating';
+                const color = isRelocating ? '#3b82f6' : '#f59e0b';
                 const droneIcon = L.divIcon({
                     className: '',
-                    html: `<div style="filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));">${droneSvg}</div>`,
+                    html: `<div style="filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));">${makeDroneSvg(color)}</div>`,
                     iconSize: [28, 28], iconAnchor: [14, 14],
                 });
                 L.marker([lat, lng], { icon: droneIcon })
                     .addTo(map)
-                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;">${tooltip}</div>`, { direction: 'top', offset: [0, -16] });
+                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;">${tooltip}${isRelocating ? '<br/><span style="color:#3b82f6;font-weight:600;">Relocating (empty)</span>' : ''}</div>`, { direction: 'top', offset: [0, -16] });
             });
 
             // Lines legend
-            if (lines.length > 0) {
+            if (lines.length > 0 || dronePositions.length > 0) {
+                const hasCarrying = dronePositions.some(p => p.drone.status === 'on_route');
+                const hasRelocating = dronePositions.some(p => p.drone.status === 'relocating');
                 const legend = L.control({ position: 'bottomleft' });
                 legend.onAdd = () => {
                     const div = L.DomUtil.create('div');
                     div.style.cssText = 'background:white;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;font-family:Inter,sans-serif;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,0.08);min-width:130px;';
                     div.innerHTML =
-                        `<div style="font-weight:700;margin-bottom:8px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Lines</div>` +
-                        lines.map(l => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><div style="width:22px;height:3px;background:${l.color};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">${l.name}</span></div>`).join('') +
-                        (routeCoords.length > 1 ? `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;"><div style="width:22px;height:3px;background:#f59e0b;border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">Active Route</span></div>` : '');
+                        (lines.length > 0 ? `<div style="font-weight:700;margin-bottom:8px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Lines</div>` +
+                        lines.map(l => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><div style="width:22px;height:3px;background:${l.color};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">${l.name}</span></div>`).join('') : '') +
+                        (routeCoords.length > 1 ? `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;"><div style="width:22px;height:3px;background:#f59e0b;border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">Active Route</span></div>` : '') +
+                        (hasCarrying || hasRelocating ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;font-weight:700;margin-bottom:6px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Drones</div>` : '') +
+                        (hasCarrying ? `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><div style="width:10px;height:10px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></div><span style="color:#0f172a;">Carrying delivery</span></div>` : '') +
+                        (hasRelocating ? `<div style="display:flex;align-items:center;gap:8px;"><div style="width:10px;height:10px;border-radius:50%;background:#3b82f6;flex-shrink:0;"></div><span style="color:#0f172a;">Relocating (empty)</span></div>` : '');
                     return div;
                 };
                 legend.addTo(map);
@@ -235,6 +256,8 @@ export default function AdminDashboard() {
     const [showAddDrone, setShowAddDrone] = useState(false);
     const [droneForm, setDroneForm] = useState(emptyDroneForm);
     const [editingDroneId, setEditingDroneId] = useState(null);
+    const [relocatingDrone, setRelocatingDrone] = useState(null);
+    const [relocateTarget, setRelocateTarget] = useState('');
 
     const emptyNodeForm = { id: '', type: 'transit', status: 'online', battery: 100, temp: 0, lat: '', lng: '', max_drone_capacity: 4 };
     const [showAddNode, setShowAddNode] = useState(false);
@@ -260,6 +283,33 @@ export default function AdminDashboard() {
         { src: '/feeds/cam2.png', label: orderedStations[1] ? `${orderedStations[1].id} Landing Pad` : 'Relay Pad', id: 'CAM-02' },
         { src: '/feeds/cam3.png', label: orderedStations.at(-2) ? `${orderedStations.at(-2).id} Approach` : 'Destination Approach', id: 'CAM-03' },
     ];
+
+    async function handleRelocate(e) {
+        e.preventDefault();
+        if (!relocateTarget) return;
+        const RELOCATION_SPEED_KMH = 80;
+        const origin = findStationMatch(relocatingDrone.location, stations);
+        const target = stations.find(s => s.id === relocateTarget);
+        let time_of_arrival = 'In transit';
+        if (origin && target) {
+            const dist = haversineKm(origin.lat, origin.lng, target.lat, target.lng);
+            time_of_arrival = formatMinutes(Math.round(dist / RELOCATION_SPEED_KMH * 60));
+        }
+        try {
+            await updateDrone(relocatingDrone.id, {
+                status: 'relocating',
+                target_location: relocateTarget,
+                location: `En route to ${relocateTarget}`,
+                time_of_arrival,
+                speed: RELOCATION_SPEED_KMH,
+                assignment: null,
+            });
+            setRelocatingDrone(null);
+            setRelocateTarget('');
+        } catch (err) {
+            alert('Failed to relocate drone: ' + err.message);
+        }
+    }
 
     function openEditDrone(drone) {
         setEditingDroneId(drone.id);
@@ -506,7 +556,7 @@ export default function AdminDashboard() {
                             >
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                                     <span className="mono" style={{ fontSize: 13, fontWeight: 700 }}>{d.id}</span>
-                                    <span className={`badge ${d.status === 'on_route' ? 'badge-green' : d.status === 'charging' ? 'badge-yellow' : 'badge-neutral'}`} style={{ fontSize: 10 }}>
+                                    <span className={`badge ${d.status === 'on_route' ? 'badge-green' : d.status === 'relocating' ? 'badge-blue' : d.status === 'charging' ? 'badge-yellow' : 'badge-neutral'}`} style={{ fontSize: 10 }}>
                                         {d.status.replace(/_/g, ' ')}
                                     </span>
                                 </div>
@@ -638,14 +688,17 @@ export default function AdminDashboard() {
                                                 </td>
                                                 <td className="mono">{d.batteryHealth}%</td>
                                                 <td>
-                                                    <span className={`badge ${d.status === 'ready' ? 'badge-green' : d.status === 'on_route' ? 'badge-blue' : 'badge-yellow'}`}>
+                                                    <span style={{ fontSize: 12, fontWeight: 600, color: d.status === 'ready' ? '#22c55e' : d.status === 'on_route' ? '#3b82f6' : d.status === 'relocating' ? '#f97316' : d.status === 'charging' ? '#ef4444' : 'var(--text-secondary)' }}>
                                                         {d.status === 'on_route' ? 'on route' : d.status}
                                                     </span>
                                                 </td>
-                                                <td className="muted">{d.status === 'on_route' ? d.target_location : '—'}</td>
-                                                <td className="mono">{d.status === 'on_route' ? d.time_of_arrival : '—'}</td>
-                                                <td style={{ textAlign: 'right' }}>
-                                                    <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditDrone(d)}>Edit</button>
+                                                <td className="muted">{['on_route', 'relocating'].includes(d.status) ? d.target_location : '—'}</td>
+                                                <td className="mono">{['on_route', 'relocating'].includes(d.status) ? d.time_of_arrival : '—'}</td>
+                                                <td>
+                                                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => { setRelocatingDrone(d); setRelocateTarget(''); }}>Relocate</button>
+                                                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditDrone(d)}>Edit</button>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         ))}
@@ -779,6 +832,34 @@ export default function AdminDashboard() {
                     </div>
                 )}
 
+                {/* Relocate Drone Modal */}
+                {relocatingDrone && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div className="card" style={{ width: 400, padding: '32px 36px' }}>
+                            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Relocate {relocatingDrone.id}</h2>
+                            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 24 }}>
+                                {relocatingDrone.name} · currently at <strong>{relocatingDrone.location}</strong>
+                                {relocatingDrone.assignment && <span style={{ color: 'var(--warning)', marginLeft: 6 }}>⚠ Has active assignment — relocation will clear it</span>}
+                            </p>
+                            <form onSubmit={handleRelocate}>
+                                <div style={{ marginBottom: 24 }}>
+                                    <label className="form-label">Target Node</label>
+                                    <select className="form-input" required value={relocateTarget} onChange={e => setRelocateTarget(e.target.value)}>
+                                        <option value="">Select destination node…</option>
+                                        {stations.map(s => (
+                                            <option key={s.id} value={s.id}>{s.id} ({s.type})</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                                    <button type="button" className="btn btn-secondary" onClick={() => { setRelocatingDrone(null); setRelocateTarget(''); }}>Cancel</button>
+                                    <button type="submit" className="btn btn-primary">Dispatch</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
                 {/* Add Drone Modal */}
                 {showAddDrone && (
                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -820,6 +901,7 @@ export default function AdminDashboard() {
                                         <option value="ready">Ready</option>
                                         <option value="charging">Charging</option>
                                         <option value="on_route">On Route</option>
+                                        <option value="relocating">Relocating</option>
                                     </select>
                                 </div>
                                 {droneForm.status === 'on_route' && (
