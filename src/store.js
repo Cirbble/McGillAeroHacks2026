@@ -6,7 +6,9 @@ async function requestJson(url, options = {}) {
     const data = text ? JSON.parse(text) : null;
 
     if (!response.ok) {
-        throw new Error(data?.error || `Request failed with status ${response.status}`);
+        const error = new Error(data?.error || `Request failed with status ${response.status}`);
+        error.data = data;
+        throw error;
     }
 
     return data;
@@ -17,7 +19,13 @@ export const useStore = create((set, get) => ({
     stations: [],
     drones: [],
     lines: [],
+    opsOverview: null,
+    opsInsight: null,
+    pathInsight: null,
     isLoading: false,
+    opsLoading: false,
+    opsInsightLoading: false,
+    pathInsightLoading: false,
     hasInitialized: false,
     error: null,
 
@@ -64,6 +72,117 @@ export const useStore = create((set, get) => ({
 
         set((state) => ({ deliveries: [delivery, ...state.deliveries] }));
         return delivery;
+    },
+
+    createDemoDelivery: async (scenario = 'random') => {
+        const result = await requestJson('/api/demo/deliveries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scenario }),
+        });
+
+        set((state) => ({
+            deliveries: [result.delivery, ...state.deliveries],
+            opsOverview: state.opsOverview ? {
+                ...state.opsOverview,
+                deliveries: [result.delivery, ...state.opsOverview.deliveries],
+            } : state.opsOverview,
+        }));
+
+        return result;
+    },
+
+    fetchOpsOverview: async () => {
+        set({ opsLoading: true });
+
+        try {
+            const overview = await requestJson('/api/ops/overview');
+            set({
+                deliveries: overview.deliveries,
+                stations: overview.stations,
+                drones: overview.drones,
+                lines: overview.lines,
+                opsOverview: overview,
+                opsLoading: false,
+            });
+            return overview;
+        } catch (err) {
+            set({ opsLoading: false });
+            throw err;
+        }
+    },
+
+    fetchOpsInsight: async () => {
+        set({ opsInsightLoading: true });
+
+        try {
+            const insight = await requestJson('/api/ops/insight');
+            set({ opsInsight: insight, opsInsightLoading: false });
+            return insight;
+        } catch (err) {
+            set({ opsInsightLoading: false });
+            throw err;
+        }
+    },
+
+    fetchPathInsight: async (id) => {
+        if (!id) {
+            set({ pathInsight: null, pathInsightLoading: false });
+            return null;
+        }
+
+        set({ pathInsightLoading: true });
+
+        try {
+            const insight = await requestJson(`/api/ops/path-insight/${id}`);
+            set({ pathInsight: insight, pathInsightLoading: false });
+            return insight;
+        } catch (err) {
+            set({ pathInsightLoading: false });
+            throw err;
+        }
+    },
+
+    rerouteDelivery: async (id, payload = {}) => {
+        const result = await requestJson(`/api/deliveries/${id}/reroute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        set((state) => ({
+            deliveries: state.deliveries.map((entry) => (
+                entry.id === id ? result.delivery : entry
+            )),
+            opsOverview: state.opsOverview ? {
+                ...state.opsOverview,
+                deliveries: state.opsOverview.deliveries.map((entry) => (
+                    entry.id === id ? result.delivery : entry
+                )),
+            } : state.opsOverview,
+            pathInsight: state.pathInsight?.delivery?.id === id
+                ? { ...state.pathInsight, delivery: result.delivery }
+                : state.pathInsight,
+        }));
+
+        return result;
+    },
+
+    deleteDelivery: async (id) => {
+        const result = await requestJson(`/api/deliveries/${id}`, {
+            method: 'DELETE',
+        });
+
+        set((state) => ({
+            deliveries: state.deliveries.filter((entry) => entry.id !== id),
+            opsOverview: state.opsOverview ? {
+                ...state.opsOverview,
+                deliveries: state.opsOverview.deliveries.filter((entry) => entry.id !== id),
+            } : state.opsOverview,
+            pathInsight: state.pathInsight?.delivery?.id === id ? null : state.pathInsight,
+        }));
+
+        return result;
     },
 
     updateDeliveryStatus: async (id, status) => {

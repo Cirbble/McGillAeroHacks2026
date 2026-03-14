@@ -1,4 +1,22 @@
 import mongoose from 'mongoose';
+import { DELIVERY_STATUSES } from '../services/operations.js';
+
+const DeliveryWarningSchema = new mongoose.Schema({
+    stationId: { type: String, default: null },
+    severity: { type: String, default: 'WATCH' },
+    title: { type: String, default: '' },
+    detail: { type: String, default: '' },
+    issues: { type: [String], default: [] },
+    summary: { type: String, default: '' },
+}, { _id: false });
+
+const DeliveryEventSchema = new mongoose.Schema({
+    type: { type: String, required: true },
+    title: { type: String, required: true },
+    detail: { type: String, default: '' },
+    timestamp: { type: Date, required: true },
+    stationId: { type: String, default: null },
+}, { _id: false });
 
 const DeliverySchema = new mongoose.Schema({
     id: { type: String, required: true, unique: true },
@@ -6,7 +24,7 @@ const DeliverySchema = new mongoose.Schema({
     origin: { type: String, required: true },
     destination: { type: String, required: true },
     priority: { type: String, enum: ['Routine', 'Urgent', 'Emergency'], required: true },
-    status: { type: String, enum: ['PENDING_DISPATCH', 'IN_TRANSIT', 'HANDOFF', 'DELIVERED'], required: true },
+    status: { type: String, enum: DELIVERY_STATUSES, required: true },
     currentLeg: { type: Number, required: true, default: 0 },
     totalLegs: { type: Number, required: true, default: 1 },
     lastStation: { type: String, required: true },
@@ -15,7 +33,17 @@ const DeliverySchema = new mongoose.Schema({
     route: { type: [String], default: [] },
     reasoning: { type: String, default: '' },
     estimatedTime: { type: String, default: '2h 10m' },
+    estimatedMinutes: { type: Number, default: 130 },
     weightKg: { type: Number, default: null },
+    routeState: { type: String, enum: ['CLEAR', 'WATCH', 'ADVISORY', 'BLOCKED', 'REROUTED'], default: 'CLEAR' },
+    weatherState: { type: String, enum: ['CLEAR', 'WATCH', 'UNSTABLE', 'SEVERE'], default: 'CLEAR' },
+    routeWarnings: { type: [DeliveryWarningSchema], default: [] },
+    recommendedAction: { type: String, default: '' },
+    recommendedRoute: { type: [String], default: [] },
+    manualAttentionRequired: { type: Boolean, default: false },
+    rerouteCount: { type: Number, default: 0 },
+    lastReroutedAt: { type: Date, default: null },
+    events: { type: [DeliveryEventSchema], default: [] },
 }, { timestamps: true, id: false });
 
 export default mongoose.model('Delivery', DeliverySchema);

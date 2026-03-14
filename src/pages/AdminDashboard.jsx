@@ -1,7 +1,7 @@
 import { useLocation } from 'react-router-dom';
 import { useStore } from '../store';
 import { useEffect, useRef, useState } from 'react';
-import { Activity, AlertTriangle, Database, Camera, Maximize2, Signal, Thermometer, Battery, Gauge, MessageSquare, Send, Loader2 } from 'lucide-react';
+import { Activity, AlertTriangle, Database, Camera, Maximize2, Signal, Thermometer, Battery, Gauge, MessageSquare, Send, Loader2, RefreshCcw, BrainCircuit } from 'lucide-react';
 
 // Main south-to-north delivery corridor. Stations not listed here still appear
 // as map markers but are not connected by the corridor polyline.
@@ -104,6 +104,72 @@ function buildRouteCoordinates(delivery, stations) {
         .filter(Boolean)
         .map((station) => [station.lat, station.lng]);
 }
+
+function getActiveDronePosition(drone, stations) {
+    if (!drone) return null;
+
+    const station = findStationMatch(drone.target_location, stations) || findStationMatch(drone.location, stations);
+    if (!station) return null;
+
+    const offset = drone.status === 'on_route' ? 0.12 : 0;
+    return {
+        lat: station.lat + offset,
+        lng: station.lng + offset,
+        tooltip: `${drone.id}<br/><span style="color:#64748b">${drone.speed} km/h · ${drone.target_location || drone.location}</span>`,
+    };
+}
+
+function getStatusPresentation(delivery) {
+    const mapping = {
+        AWAITING_REVIEW: { label: 'Awaiting Review', badge: 'badge-neutral' },
+        READY_TO_LAUNCH: { label: 'Ready to Launch', badge: 'badge-blue' },
+        IN_TRANSIT: { label: 'In Flight', badge: 'badge-green' },
+        HANDOFF: { label: 'Relay Handoff', badge: 'badge-yellow' },
+        WEATHER_HOLD: { label: 'Weather Hold', badge: 'badge-red' },
+        REROUTED: { label: 'Rerouted', badge: 'badge-yellow' },
+        REJECTED: { label: 'Rejected', badge: 'badge-red' },
+        DELIVERED: { label: 'Delivered', badge: 'badge-green' },
+        PENDING_DISPATCH: { label: 'Pending Dispatch', badge: 'badge-neutral' },
+    };
+
+    return mapping[delivery?.status] || { label: delivery?.status?.replace(/_/g, ' ') || 'Unknown', badge: 'badge-neutral' };
+}
+
+function getWeatherTone(condition) {
+    return {
+        CLEAR: '#2563eb',
+        WATCH: '#f59e0b',
+        UNSTABLE: '#ea580c',
+        SEVERE: '#dc2626',
+    }[condition] || '#94a3b8';
+}
+
+function getPathTone(statusTone) {
+    if (statusTone === 'danger') return { background: '#fef2f2', border: '#fecaca', color: '#991b1b' };
+    if (statusTone === 'warning' || statusTone === 'watch') return { background: '#fff7ed', border: '#fed7aa', color: '#9a3412' };
+    return { background: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' };
+}
+
+function formatWeatherSourceLabel(source) {
+    if (source === 'open-meteo') return 'Live Open-Meteo route weather';
+    if (source === 'open-meteo-live+stale') return 'Live route weather with stale fallback';
+    if (source === 'open-meteo-live+unavailable') return 'Live route weather with unavailable nodes';
+    return source ? `Route weather: ${source}` : 'Route weather source unavailable';
+}
+
+function formatWeatherUpdate(value) {
+    if (!value) return '';
+
+    try {
+        return new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    } catch {
+        return '';
+    }
+}
+
+const RADAR_WMS_URL = 'https://geo.weather.gc.ca/geomet';
+const RADAR_WMS_LAYER = 'RADAR_1KM_RRAI';
+const RADAR_WMS_STYLE = 'RADARURPPRECIPR14-LINEAR';
 
 /* ── Leaflet Map Component ── */
 function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], height = 380, focusDrone = null }) {
@@ -278,6 +344,270 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], 
     return <div ref={mapRef} style={{ width: '100%', height }} />;
 }
 
+function OverviewWeatherMap({
+    stations = [],
+    drones = [],
+    deliveries = [],
+    lines = [],
+    weatherStations = [],
+    highlightedDelivery = null,
+    height = 380,
+    showWeatherOverlay = true,
+}) {
+    const mapRef = useRef(null);
+    const leafletRef = useRef(null);
+    const mapInstance = useRef(null);
+    const overlayGroupRef = useRef(null);
+    const radarLayerRef = useRef(null);
+    const legendControlRef = useRef(null);
+    const resizeHandleRef = useRef(null);
+
+    useEffect(() => {
+        let resizeObserver = null;
+        let cancelled = false;
+
+        async function init() {
+            const L = (await import('leaflet')).default;
+            await import('leaflet/dist/leaflet.css');
+            if (cancelled || !mapRef.current || mapInstance.current) return;
+
+            leafletRef.current = L;
+            const map = L.map(mapRef.current, {
+                center: [52.0, -72.0],
+                zoom: 5,
+                zoomControl: false,
+                attributionControl: false,
+            });
+
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+            L.control.zoom({ position: 'topright' }).addTo(map);
+
+            overlayGroupRef.current = L.layerGroup().addTo(map);
+            mapInstance.current = map;
+
+            if (typeof ResizeObserver !== 'undefined') {
+                resizeObserver = new ResizeObserver(() => {
+                    map.invalidateSize(false);
+                });
+                resizeObserver.observe(mapRef.current);
+            }
+        }
+
+        init();
+        return () => {
+            cancelled = true;
+            if (resizeHandleRef.current) {
+                window.clearTimeout(resizeHandleRef.current);
+                resizeHandleRef.current = null;
+            }
+            if (legendControlRef.current) {
+                legendControlRef.current.remove();
+                legendControlRef.current = null;
+            }
+            if (radarLayerRef.current && mapInstance.current?.hasLayer(radarLayerRef.current)) {
+                mapInstance.current.removeLayer(radarLayerRef.current);
+            }
+            resizeObserver?.disconnect();
+            if (mapInstance.current) {
+                mapInstance.current.remove();
+                mapInstance.current = null;
+            }
+            overlayGroupRef.current = null;
+            leafletRef.current = null;
+            radarLayerRef.current = null;
+        };
+    }, []);
+
+    useEffect(() => {
+        const L = leafletRef.current;
+        const map = mapInstance.current;
+        const overlayGroup = overlayGroupRef.current;
+
+        if (!L || !map || !overlayGroup) return;
+
+        overlayGroup.clearLayers();
+        if (legendControlRef.current) {
+            legendControlRef.current.remove();
+            legendControlRef.current = null;
+        }
+
+        const radarPane = map.getPane('radarPane') || map.createPane('radarPane');
+        radarPane.style.zIndex = 340;
+
+        if (showWeatherOverlay) {
+            if (!radarLayerRef.current) {
+                radarLayerRef.current = L.tileLayer.wms(RADAR_WMS_URL, {
+                    pane: 'radarPane',
+                    layers: RADAR_WMS_LAYER,
+                    styles: RADAR_WMS_STYLE,
+                    format: 'image/png',
+                    transparent: true,
+                    version: '1.3.0',
+                    opacity: 0.58,
+                    crossOrigin: true,
+                });
+            }
+
+            if (!map.hasLayer(radarLayerRef.current)) {
+                radarLayerRef.current.addTo(map);
+            }
+        } else if (radarLayerRef.current && map.hasLayer(radarLayerRef.current)) {
+            map.removeLayer(radarLayerRef.current);
+        }
+
+        const stationsById = Object.fromEntries(stations.map((station) => [station.id, station]));
+        const weatherByStation = Object.fromEntries(weatherStations.map((station) => [station.stationId, station]));
+        const activeDelivery = highlightedDelivery || deliveries.find((delivery) => !['DELIVERED', 'REJECTED'].includes(delivery.status));
+        const routeCoords = buildRouteCoordinates(activeDelivery, stations);
+        const routeStationIds = new Set(activeDelivery?.route || []);
+        const activeDronePosition = getActiveDronePosition(
+            drones.find((drone) => drone.status === 'on_route') || drones[0],
+            stations,
+        );
+        const visibleStations = showWeatherOverlay && routeStationIds.size > 0
+            ? stations.filter((station) => routeStationIds.has(station.id))
+            : stations;
+        const focusPoints = routeCoords.length > 0
+            ? [...routeCoords]
+            : stations.map((station) => [station.lat, station.lng]);
+
+        if (activeDronePosition) {
+            focusPoints.push([activeDronePosition.lat, activeDronePosition.lng]);
+        }
+
+        if (!showWeatherOverlay) {
+            lines.forEach((line) => {
+                const coords = line.stations
+                    .map((id) => stationsById[id])
+                    .filter(Boolean)
+                    .map((station) => [station.lat, station.lng]);
+
+                if (coords.length > 1) {
+                    L.polyline(coords, { color: line.color, weight: 3, opacity: 0.75 }).addTo(overlayGroup);
+                }
+            });
+        }
+
+        if (routeCoords.length > 1) {
+            if (showWeatherOverlay) {
+                L.polyline(routeCoords, {
+                    color: 'rgba(255,255,255,0.82)',
+                    weight: 9,
+                    opacity: 0.9,
+                }).addTo(overlayGroup);
+            }
+
+            L.polyline(routeCoords, {
+                color: activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? '#10b981' : '#f59e0b',
+                weight: showWeatherOverlay ? 5 : 4,
+                opacity: 0.95,
+                dashArray: activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? '12 5' : undefined,
+            }).addTo(overlayGroup);
+        }
+
+        visibleStations.forEach((station) => {
+            const isActive = station.status === 'online';
+            const weatherState = weatherByStation[station.id]?.condition || 'CLEAR';
+            const severityColor = getWeatherTone(weatherState);
+            const size = showWeatherOverlay
+                ? (routeStationIds.has(station.id) ? 14 : 10)
+                : station.type === 'distribution'
+                    ? 16
+                    : 12;
+            const anchor = size / 2;
+            const stationLines = lines.filter((line) => line.stations.includes(station.id));
+            const markerColor = routeStationIds.has(station.id) && (activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED')
+                ? '#10b981'
+                : stationLines.length > 0
+                    ? stationLines[0].color
+                    : (isActive ? '#2563eb' : '#94a3b8');
+            const icon = L.divIcon({
+                className: '',
+                html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${isActive ? markerColor : '#94a3b8'};border:3px solid white;box-shadow:${showWeatherOverlay ? `0 0 0 2px ${severityColor}` : '0 1px 4px rgba(0,0,0,0.2)'};"></div>`,
+                iconSize: [size, size],
+                iconAnchor: [anchor, anchor],
+            });
+            const lineNames = stationLines.map((line) => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${line.color};margin-right:3px;"></span>${line.name}`).join(' · ');
+            const weatherSummary = showWeatherOverlay && weatherState !== 'CLEAR'
+                ? `<br/><span style="color:${severityColor};font-size:10px;">${weatherState.toLowerCase()} weather on route</span>`
+                : '';
+
+            L.marker([station.lat, station.lng], { icon })
+                .addTo(overlayGroup)
+                .bindTooltip(
+                    `<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${station.id}</strong><br/><span style="color:#64748b">${getStationLabel(station)}</span>${lineNames && !showWeatherOverlay ? `<br/><span style="color:#64748b;font-size:10px;">${lineNames}</span>` : ''}${weatherSummary}</div>`,
+                    { direction: 'top', offset: [0, -10] },
+                );
+        });
+
+        if (activeDronePosition) {
+            const droneIcon = L.divIcon({
+                className: '',
+                html: '<div style="width:18px;height:18px;border-radius:50%;background:#f59e0b;border:3px solid white;box-shadow:0 0 0 4px rgba(245,158,11,0.2), 0 2px 6px rgba(0,0,0,0.2);"></div>',
+                iconSize: [18, 18],
+                iconAnchor: [9, 9],
+            });
+
+            L.marker([activeDronePosition.lat, activeDronePosition.lng], { icon: droneIcon })
+                .addTo(overlayGroup)
+                .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${activeDronePosition.tooltip}</strong></div>`, { direction: 'top', offset: [0, -12] });
+        }
+
+        const legend = L.control({ position: 'bottomleft' });
+        legend.onAdd = () => {
+            const div = L.DomUtil.create('div');
+
+            if (!showWeatherOverlay && lines.length > 0) {
+                div.style.cssText = 'background:white;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;font-family:Inter,sans-serif;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,0.08);min-width:150px;';
+                div.innerHTML =
+                    `<div style="font-weight:700;margin-bottom:8px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Lines</div>` +
+                    lines.map((line) => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><div style="width:22px;height:3px;background:${line.color};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">${line.name}</span></div>`).join('') +
+                    (routeCoords.length > 1 ? `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;"><div style="width:22px;height:3px;background:${activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? '#10b981' : '#f59e0b'};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">Selected Route</span></div>` : '');
+            } else {
+                div.style.cssText = 'background:rgba(255,255,255,0.92);border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-family:Inter,sans-serif;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,0.08);min-width:180px;';
+                div.innerHTML =
+                    '<div style="font-weight:700;margin-bottom:6px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Radar Overlay</div>' +
+                    '<div style="color:#0f172a;line-height:1.5;">MSC GeoMet radar composite over the selected mission corridor.</div>' +
+                    `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;"><div style="width:22px;height:3px;background:${activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? '#10b981' : '#f59e0b'};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">${activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? 'Manual reroute active' : 'Current mission path'}</span></div>`;
+            }
+
+            return div;
+        };
+
+        legend.addTo(map);
+        legendControlRef.current = legend;
+
+        const focusBounds = L.latLngBounds(focusPoints);
+        if (resizeHandleRef.current) {
+            window.clearTimeout(resizeHandleRef.current);
+        }
+
+        resizeHandleRef.current = window.setTimeout(() => {
+            if (mapInstance.current !== map || !map.getContainer()) return;
+
+            map.invalidateSize(false);
+
+            if (focusPoints.length > 1 && focusBounds.isValid()) {
+                map.fitBounds(focusBounds.pad(routeCoords.length > 1 ? 0.28 : 0.16), {
+                    animate: false,
+                });
+            } else if (focusPoints.length === 1) {
+                map.setView(focusPoints[0], 7, { animate: false });
+            }
+        }, 80);
+    }, [
+        deliveries,
+        drones,
+        highlightedDelivery,
+        lines,
+        showWeatherOverlay,
+        stations,
+        weatherStations,
+    ]);
+
+    return <div ref={mapRef} style={{ width: '100%', height, minHeight: height, background: '#e2e8f0' }} />;
+}
+
 /* ── Drone Feed Component ── */
 function DroneFeed({ src, label, id, isVideo }) {
     return (
@@ -304,7 +634,27 @@ function DroneFeed({ src, label, id, isVideo }) {
 }
 
 export default function AdminDashboard() {
-    const { deliveries, stations, drones, lines, addStation, addDrone, updateStation, updateDrone, addLine, updateLine } = useStore();
+    const {
+        deliveries,
+        stations,
+        drones,
+        lines,
+        opsOverview,
+        opsLoading,
+        pathInsight,
+        pathInsightLoading,
+        addStation,
+        addDrone,
+        updateStation,
+        updateDrone,
+        addLine,
+        updateLine,
+        fetchOpsOverview,
+        fetchPathInsight,
+        rerouteDelivery,
+        createDemoDelivery,
+        deleteDelivery,
+    } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
 
@@ -328,17 +678,74 @@ export default function AdminDashboard() {
     const [editingLineId, setEditingLineId] = useState(null);
 
     const [selectedDroneId, setSelectedDroneId] = useState(null);
+    const [selectedDeliveryId, setSelectedDeliveryId] = useState(null);
+    const [reroutingDeliveryId, setReroutingDeliveryId] = useState(null);
+    const [rerouteDecision, setRerouteDecision] = useState(null);
+    const [showWeatherOverlay, setShowWeatherOverlay] = useState(false);
     const [cortexMessages, setCortexMessages] = useState([]);
     const [cortexInput, setCortexInput] = useState('');
     const [cortexLoading, setCortexLoading] = useState(false);
     const orderedStations = orderStations(stations);
     const activeDrone = drones.find((drone) => drone.status === 'on_route') || drones[0] || null;
-    const activeDelivery = deliveries.find((delivery) => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(delivery.status)) || null;
+    const weatherStations = opsOverview?.weather?.stations || [];
+    const active = deliveries.filter((delivery) => !['DELIVERED', 'REJECTED'].includes(delivery.status));
+    const activeDelivery = deliveries.find((delivery) => delivery.id === selectedDeliveryId)
+        || active[0]
+        || null;
+    const selectedDelivery = activeDelivery;
+    const selectedPathInsight = pathInsight?.delivery?.id === selectedDelivery?.id ? pathInsight : null;
     const surveillanceFeeds = [
         { src: '/feeds/cam1.png', label: activeDrone ? `${activeDrone.id} Forward Camera` : 'Primary Drone Feed', id: 'CAM-01' },
         { src: '/feeds/cam2.png', label: orderedStations[1] ? `${orderedStations[1].id} Landing Pad` : 'Relay Pad', id: 'CAM-02' },
         { src: '/feeds/cam3.png', label: orderedStations.at(-2) ? `${orderedStations.at(-2).id} Approach` : 'Destination Approach', id: 'CAM-03' },
     ];
+
+    useEffect(() => {
+        if (!['', '#operations', '#analytics'].includes(hash)) return;
+
+        fetchOpsOverview().catch((err) => {
+            console.error('Failed to load ops overview:', err);
+        });
+
+        if (hash === '') {
+            const intervalId = window.setInterval(() => {
+                fetchOpsOverview().catch((err) => {
+                    console.error('Failed to refresh ops overview:', err);
+                });
+            }, 60000);
+
+            return () => window.clearInterval(intervalId);
+        }
+    }, [fetchOpsOverview, hash]);
+
+    useEffect(() => {
+        const highlighted = opsOverview?.highlightedDeliveryId || active[0]?.id || null;
+        if (highlighted && !active.some((delivery) => delivery.id === selectedDeliveryId)) {
+            setSelectedDeliveryId(highlighted);
+        } else if (!selectedDeliveryId && highlighted) {
+            setSelectedDeliveryId(highlighted);
+        }
+    }, [active, opsOverview?.highlightedDeliveryId, selectedDeliveryId]);
+
+    useEffect(() => {
+        if (hash !== '') return;
+        if (!selectedDelivery?.id) {
+            fetchPathInsight(null).catch(() => {});
+            return;
+        }
+
+        fetchPathInsight(selectedDelivery.id).catch((err) => {
+            console.error('Failed to load path insight:', err);
+        });
+    }, [
+        fetchPathInsight,
+        hash,
+        selectedDelivery?.id,
+    ]);
+
+    useEffect(() => {
+        setRerouteDecision(null);
+    }, [selectedDelivery?.id]);
 
     async function handleRelocate(e) {
         e.preventDefault();
@@ -458,8 +865,112 @@ export default function AdminDashboard() {
         }
     }
 
-    const active = deliveries.filter(d => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(d.status));
     const onlineStations = stations.filter(s => s.status === 'online').length;
+    const metrics = opsOverview?.metrics || {
+        activeFlights: active.length,
+        watchStations: weatherStations.filter((station) => station.condition !== 'CLEAR').length,
+        severeStations: weatherStations.filter((station) => ['UNSTABLE', 'SEVERE'].includes(station.condition)).length,
+        reroutedFlights: deliveries.filter((delivery) => delivery.status === 'REROUTED').length,
+        weatherHolds: deliveries.filter((delivery) => delivery.status === 'WEATHER_HOLD').length,
+        avgDeliveryMinutes: 74,
+        onlineStations,
+        totalStations: stations.length,
+    };
+    const selectedStatus = getStatusPresentation(selectedDelivery);
+    const compactQueue = active.slice(0, 4);
+    const pathReport = selectedPathInsight?.pathReport || null;
+    const pathTone = getPathTone(pathReport?.statusTone);
+    const weatherSourceLabel = formatWeatherSourceLabel(opsOverview?.weather?.source);
+    const weatherUpdatedAt = formatWeatherUpdate(opsOverview?.weather?.updatedAt);
+
+    async function handleManualReroute(deliveryId) {
+        setReroutingDeliveryId(deliveryId);
+        setRerouteDecision(null);
+
+        try {
+            const result = await rerouteDelivery(deliveryId);
+            await Promise.all([
+                fetchOpsOverview(),
+                fetchPathInsight(deliveryId),
+            ]);
+
+            if (result.decision?.status !== 'rerouted') {
+                setRerouteDecision({
+                    deliveryId,
+                    tone: 'warning',
+                    title: result.decision?.summary || 'Manual reroute rejected',
+                    detail: result.decision?.detail || 'No route change was applied.',
+                });
+                return;
+            }
+
+            setRerouteDecision({
+                deliveryId,
+                tone: 'success',
+                title: result.decision?.summary || 'Manual reroute approved',
+                detail: result.decision?.detail || result.delivery?.recommendedAction || 'The route was updated.',
+            });
+        } catch (err) {
+            setRerouteDecision({
+                deliveryId,
+                tone: 'warning',
+                title: err.data?.decision?.summary || 'Manual reroute rejected',
+                detail: err.data?.decision?.detail || err.message,
+            });
+        } finally {
+            setReroutingDeliveryId(null);
+        }
+    }
+
+    async function handleCreateDemoMission(scenario) {
+        try {
+            const result = await createDemoDelivery(scenario);
+            await Promise.all([
+                fetchOpsOverview(),
+                fetchPathInsight(result.delivery.id),
+            ]);
+            setSelectedDeliveryId(result.delivery.id);
+            setRerouteDecision({
+                deliveryId: result.delivery.id,
+                tone: result.scenario === 'bad-path' ? 'warning' : 'success',
+                title: result.scenario === 'bad-path' ? 'Bad-path demo created' : 'Demo mission created',
+                detail: result.scenario === 'bad-path'
+                    ? 'This mission was created on a weather-affected corridor so Gemini, Snowflake, and manual reroute can react to it.'
+                    : 'This mission was created on a stable corridor for comparison against the bad-path scenario.',
+            });
+        } catch (err) {
+            setRerouteDecision({
+                deliveryId: selectedDelivery?.id || 'demo-create',
+                tone: 'warning',
+                title: 'Demo mission failed',
+                detail: err.message,
+            });
+        }
+    }
+
+    async function handleDeleteSelectedMission() {
+        if (!selectedDelivery?.id) return;
+
+        try {
+            const deletedId = selectedDelivery.id;
+            await deleteDelivery(deletedId);
+            await fetchOpsOverview();
+            setSelectedDeliveryId(null);
+            setRerouteDecision({
+                deliveryId: deletedId,
+                tone: 'success',
+                title: 'Mission deleted',
+                detail: `${deletedId} was removed from the database.`,
+            });
+        } catch (err) {
+            setRerouteDecision({
+                deliveryId: selectedDelivery.id,
+                tone: 'warning',
+                title: 'Delete failed',
+                detail: err.message,
+            });
+        }
+    }
 
     /* ── Platform Overview ── */
     if (hash === '') {
@@ -467,81 +978,260 @@ export default function AdminDashboard() {
             <div>
                 <div className="page-header">
                     <h1>Platform Overview</h1>
-                    <p>Real-time corridor health and active logistics across the Northern Quebec corridor.</p>
+                    <p>Selected-mission weather overlay, manual reroute control, and route-specific AI guidance.</p>
                 </div>
 
-                <div className="stats-grid">
+                <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 20 }}>
                     <div className="card stat-card">
-                        <div className="stat-label">Network Uptime</div>
-                        <div className="stat-value">99.9<span className="stat-value-unit">%</span></div>
-                        <div className="stat-sub" style={{ color: 'var(--accent)' }}>↑ 0.2% from last week</div>
+                        <div className="stat-label">Open Missions</div>
+                        <div className="stat-value">{metrics.activeFlights}</div>
+                        <div className="stat-sub stat-sub-muted">{compactQueue.length} shown in queue</div>
                     </div>
                     <div className="card stat-card">
-                        <div className="stat-label">Active Flights</div>
-                        <div className="stat-value">{active.length}<span className="stat-value-unit">/ 24</span></div>
-                        <div className="stat-sub stat-sub-muted">{Math.round(active.length / 24 * 100)}% capacity</div>
+                        <div className="stat-label">Path Weather</div>
+                        <div className="stat-value">{pathReport?.routeState || selectedDelivery?.routeState || 'CLEAR'}</div>
+                        <div className="stat-sub stat-sub-muted">{pathReport ? `${pathReport.impactedStops} impacted stop${pathReport.impactedStops === 1 ? '' : 's'}` : 'Select a mission'}</div>
                     </div>
                     <div className="card stat-card">
-                        <div className="stat-label">Nodes Online</div>
-                        <div className="stat-value">{onlineStations}<span className="stat-value-unit">/ {stations.length}</span></div>
-                        <div className="stat-sub stat-sub-muted">All critical hubs operational</div>
-                    </div>
-                    <div className="card stat-card">
-                        <div className="stat-label">Avg. Delivery Time</div>
-                        <div className="stat-value">1h 14m</div>
-                        <div className="stat-sub" style={{ color: 'var(--accent)' }}>↓ 18% from last month</div>
+                        <div className="stat-label">Route Response</div>
+                        <div className="stat-value">{selectedDelivery?.routeState === 'REROUTED' || selectedDelivery?.status === 'REROUTED' ? 'MANUAL' : selectedDelivery?.status === 'WEATHER_HOLD' ? 'HOLD' : 'LIVE'}</div>
+                        <div className="stat-sub stat-sub-muted">{selectedDelivery?.estimatedTime || 'No mission selected'}</div>
                     </div>
                 </div>
 
-                {/* Map + Queue */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 16, marginBottom: 24 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 16, alignItems: 'start' }}>
                     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                         <div className="card-header">
-                            <span className="card-header-title"><Signal size={14} /> Northern Quebec Corridor – Live Tracking</span>
+                            <span className="card-header-title"><Signal size={14} /> Selected Route Weather + Routing</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                    {showWeatherOverlay ? 'Live MSC GeoMet radar' : 'Base corridor map'}
+                                </span>
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    style={{ padding: '6px 10px', fontSize: 11 }}
+                                    onClick={() => setShowWeatherOverlay((current) => !current)}
+                                >
+                                    {showWeatherOverlay ? 'Hide weather overlay' : 'Show weather overlay'}
+                                </button>
+                            </div>
                         </div>
-                        <CorridorMap height={400} stations={orderedStations} drones={drones} deliveries={deliveries} lines={lines} />
+                        <OverviewWeatherMap
+                            height={480}
+                            stations={orderedStations}
+                            drones={drones}
+                            deliveries={deliveries}
+                            lines={lines}
+                            weatherStations={weatherStations}
+                            highlightedDelivery={selectedDelivery}
+                            showWeatherOverlay={showWeatherOverlay}
+                        />
                     </div>
 
-                    <div className="card" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                        <div className="card-header">
-                            <span className="card-header-title"><Activity size={14} /> Active Queue</span>
-                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{active.length} flights</span>
-                        </div>
-                        <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
-                            {active.map(d => (
-                                <div key={d.id} style={{ padding: '14px 16px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: 8 }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                                        <span style={{ fontWeight: 600, fontSize: 13 }}>{d.payload}</span>
-                                        <span className="badge badge-neutral" style={{ fontSize: 10 }}>{d.status.replace(/_/g, ' ')}</span>
-                                    </div>
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8 }}>
-                                        {d.id} · {d.origin} → {d.destination}
-                                    </div>
-                                    {d.status === 'IN_TRANSIT' && (
-                                        <div>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
-                                                <span>Leg {d.currentLeg}/{d.totalLegs}</span>
-                                                <span className="mono">ETA {new Date(d.eta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                            </div>
-                                            <div className="progress-track"><div className="progress-fill" style={{ width: `${(d.currentLeg / d.totalLegs) * 100}%` }} /></div>
-                                        </div>
-                                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                            <div className="card-header">
+                                <span className="card-header-title"><BrainCircuit size={14} /> Path Weather Report</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                    <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                        {weatherSourceLabel}{weatherUpdatedAt ? ` · ${weatherUpdatedAt}` : ''}
+                                    </span>
+                                    {opsLoading && <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Refreshing…</span>}
                                 </div>
-                            ))}
-                            {active.length === 0 && (
-                                <div style={{ textAlign: 'center', padding: 32, color: 'var(--text-tertiary)', fontSize: 13 }}>No active flights.</div>
-                            )}
-                        </div>
-                    </div>
-                </div>
+                            </div>
+                            <div style={{ padding: 16, display: 'grid', gap: 12 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                                    <div>
+                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Selected mission</div>
+                                        <div style={{ fontWeight: 700 }}>{selectedDelivery?.id || 'No mission selected'}</div>
+                                    </div>
+                                    {selectedDelivery && <span className={`badge ${selectedStatus.badge}`}>{selectedStatus.label}</span>}
+                                </div>
 
-                {/* Surveillance Feeds */}
-                <div style={{ marginBottom: 24 }}>
-                    <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Surveillance Feeds</h2>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-                        {surveillanceFeeds.map((feed) => (
-                            <DroneFeed key={feed.id} src={feed.src} label={feed.label} id={feed.id} />
-                        ))}
+                                <div
+                                    style={{
+                                        padding: '12px 14px',
+                                        borderRadius: 8,
+                                        border: `1px solid ${pathTone.border}`,
+                                        background: pathTone.background,
+                                        color: pathTone.color,
+                                    }}
+                                >
+                                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Path headline</div>
+                                    <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                                        {pathReport?.headline || (pathInsightLoading ? 'Loading route weather report…' : 'Select a mission to inspect path weather.')}
+                                    </div>
+                                </div>
+
+                                {pathReport && (
+                                    <div style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                        <div style={{ display: 'grid', gap: 8 }}>
+                                            <div>
+                                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Operational effect</div>
+                                                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>{pathReport.operationalEffect}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Weather summary</div>
+                                                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>{pathReport.summary}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Signals on this path</div>
+                                                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                                                    {pathReport.weatherSignals?.length > 0 ? pathReport.weatherSignals.join(' • ') : 'No significant weather signals on the selected route.'}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div style={{ padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>Demo controls</div>
+                                    <div style={{ display: 'grid', gap: 8 }}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={() => handleCreateDemoMission('bad-path')}
+                                        >
+                                            Add bad-path mission
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={() => handleCreateDemoMission('random')}
+                                        >
+                                            Add random mission
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={handleDeleteSelectedMission}
+                                            disabled={!selectedDelivery}
+                                        >
+                                            Delete selected mission
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {selectedDelivery && ['WEATHER_HOLD', 'REROUTED', 'IN_TRANSIT', 'HANDOFF', 'READY_TO_LAUNCH'].includes(selectedDelivery.status) && (
+                                    <>
+                                        {pathReport && (
+                                            <div
+                                                style={{
+                                                    padding: '10px 12px',
+                                                    borderRadius: 8,
+                                                    border: pathReport.manualRerouteSuggested
+                                                        ? '1px solid rgba(245,158,11,0.28)'
+                                                        : '1px solid rgba(148,163,184,0.2)',
+                                                    background: pathReport.manualRerouteSuggested
+                                                        ? 'rgba(245,158,11,0.08)'
+                                                        : 'rgba(148,163,184,0.08)',
+                                                }}
+                                            >
+                                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>
+                                                    Manual reroute check
+                                                </div>
+                                                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                                                    {pathReport.manualRerouteHint}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            style={{ justifyContent: 'center' }}
+                                            onClick={() => handleManualReroute(selectedDelivery.id)}
+                                            disabled={reroutingDeliveryId === selectedDelivery.id}
+                                        >
+                                            {reroutingDeliveryId === selectedDelivery.id ? (
+                                                <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Recomputing route…</>
+                                            ) : (
+                                                <><RefreshCcw size={14} /> Manual reroute from current weather</>
+                                            )}
+                                        </button>
+
+                                        {rerouteDecision?.deliveryId === selectedDelivery.id && (
+                                            <div
+                                                style={{
+                                                    padding: '12px 14px',
+                                                    borderRadius: 8,
+                                                    border: rerouteDecision.tone === 'success'
+                                                        ? '1px solid rgba(16,185,129,0.24)'
+                                                        : '1px solid rgba(245,158,11,0.28)',
+                                                    background: rerouteDecision.tone === 'success'
+                                                        ? 'rgba(16,185,129,0.08)'
+                                                        : 'rgba(245,158,11,0.1)',
+                                                }}
+                                            >
+                                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>
+                                                    {rerouteDecision.title}
+                                                </div>
+                                                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                                                    {rerouteDecision.detail}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+
+                                <div style={{ display: 'grid', gap: 10 }}>
+                                    <div style={{ paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Gemini</div>
+                                        <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                                            {pathInsightLoading && !selectedPathInsight ? 'Generating path-specific Gemini guidance…' : selectedPathInsight?.gemini?.content || 'Gemini insight unavailable.'}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Snowflake</div>
+                                        <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                                            {pathInsightLoading && !selectedPathInsight ? 'Generating path-specific Snowflake guidance…' : selectedPathInsight?.snowflake?.content || 'Snowflake insight unavailable.'}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                            <div className="card-header">
+                                <span className="card-header-title"><Activity size={14} /> Mission Queue</span>
+                                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{active.length} open</span>
+                            </div>
+                            <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                {compactQueue.map((delivery) => {
+                                    const status = getStatusPresentation(delivery);
+                                    return (
+                                        <button
+                                            key={delivery.id}
+                                            type="button"
+                                            onClick={() => setSelectedDeliveryId(delivery.id)}
+                                            style={{
+                                                width: '100%',
+                                                textAlign: 'left',
+                                                padding: '12px 14px',
+                                                borderRadius: 8,
+                                                border: selectedDelivery?.id === delivery.id ? '1px solid rgba(37,99,235,0.28)' : '1px solid var(--border)',
+                                                background: selectedDelivery?.id === delivery.id ? 'var(--accent-light)' : 'var(--bg)',
+                                            }}
+                                        >
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                                                <span style={{ fontSize: 13, fontWeight: 600 }}>{delivery.payload}</span>
+                                                <span className={`badge ${status.badge}`} style={{ fontSize: 10 }}>{status.label}</span>
+                                            </div>
+                                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                                                {delivery.origin} → {delivery.destination}
+                                            </div>
+                                            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
+                                                {selectedDelivery?.id === delivery.id ? 'Currently selected' : 'Tap to inspect route weather'}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                                {compactQueue.length === 0 && (
+                                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-tertiary)', fontSize: 13 }}>No open missions.</div>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

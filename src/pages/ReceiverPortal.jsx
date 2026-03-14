@@ -11,7 +11,7 @@ export default function ReceiverPortal() {
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [lang, setLang] = useState('en');
 
-    const inbound = deliveries.filter(d => (d.status === 'IN_TRANSIT' || d.status === 'HANDOFF') && d.currentLeg > 0).sort((a, b) => new Date(a.eta) - new Date(b.eta));
+    const inbound = deliveries.filter(d => ['IN_TRANSIT', 'HANDOFF', 'REROUTED'].includes(d.status) && d.currentLeg > 0).sort((a, b) => new Date(a.eta) - new Date(b.eta));
     const completed = deliveries.filter(d => d.status === 'DELIVERED').sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     const next = inbound[0];
     const minutesToArrival = next ? Math.max(0, Math.ceil((new Date(next.eta) - Date.now()) / 60000)) : 0;

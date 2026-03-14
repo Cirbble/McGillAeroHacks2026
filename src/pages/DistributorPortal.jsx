@@ -31,9 +31,9 @@ export default function DistributorPortal() {
         setError(null);
 
         try {
-            const result = await dispatchWithGemini(aiPrompt, stations);
+            const result = await dispatchWithGemini(aiPrompt);
             const createdDelivery = await addDelivery(result);
-            setGeminiResult(result);
+            setGeminiResult(createdDelivery);
             setAiPrompt('');
 
             // Voice confirmation via ElevenLabs
@@ -43,7 +43,7 @@ export default function DistributorPortal() {
                     id: createdDelivery.id,
                     payload: createdDelivery.payload,
                     destination: createdDelivery.destination,
-                    estimatedTime: result.estimated_time_minutes ? `${Math.floor(result.estimated_time_minutes / 60)} hours, ${result.estimated_time_minutes % 60} minutes` : '2 hours',
+                    estimatedTime: createdDelivery.estimatedMinutes ? `${Math.floor(createdDelivery.estimatedMinutes / 60)} hours, ${createdDelivery.estimatedMinutes % 60} minutes` : '2 hours',
                     legs: createdDelivery.totalLegs,
                 });
                 await speakText(msg);
@@ -63,9 +63,11 @@ export default function DistributorPortal() {
         e.preventDefault();
         if (!payload) return;
         setError(null);
+        setGeminiResult(null);
 
         try {
-            await addDelivery({ payload, origin, destination, priority });
+            const createdDelivery = await addDelivery({ payload, origin, destination, priority });
+            setGeminiResult(createdDelivery);
             setPayload('');
         } catch (err) {
             setError(err.message);
@@ -98,7 +100,7 @@ export default function DistributorPortal() {
                             {useAI ? (
                                 <form onSubmit={handleAIDispatch}>
                                     <div className="info-box info-box-blue" style={{ marginBottom: 20 }}>
-                                        <strong>Gemini Routing Engine</strong> — Describe your delivery in plain language. The AI will parse your request, calculate the optimal relay path through the Northern Quebec corridor, and explain its routing decision.
+                                        <strong>Gemini Routing Engine</strong> — Describe your delivery in plain language. The backend Gemini planner will structure the manifest, then Aero'ed will validate it against live corridor weather and suggest a manual reroute when the current path is risky.
                                     </div>
                                     <div style={{ marginBottom: 20 }}>
                                         <textarea
@@ -175,17 +177,17 @@ export default function DistributorPortal() {
                         </div>
                     </div>
 
-                    {/* Gemini Response Panel */}
+                    {/* Dispatch Assessment Panel */}
                     {geminiResult && (
                         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                             <div className="card-header" style={{ background: 'var(--accent-light)' }}>
-                                <span className="card-header-title" style={{ color: 'var(--accent)' }}><Cpu size={15} /> Gemini Route Analysis</span>
+                                <span className="card-header-title" style={{ color: 'var(--accent)' }}><Cpu size={15} /> Dispatch Route Assessment</span>
                             </div>
                             <div className="card-body" style={{ fontSize: 13 }}>
                                 <div style={{ marginBottom: 16 }}>
                                     <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Parsed Payload</div>
                                     <div style={{ fontWeight: 600 }}>{geminiResult.payload}</div>
-                                    {geminiResult.weight_kg && <div style={{ color: 'var(--text-secondary)', marginTop: 2 }}>{geminiResult.weight_kg} kg</div>}
+                                    {(geminiResult.weightKg || geminiResult.weight_kg) && <div style={{ color: 'var(--text-secondary)', marginTop: 2 }}>{geminiResult.weightKg || geminiResult.weight_kg} kg</div>}
                                 </div>
 
                                 <div style={{ marginBottom: 16 }}>
@@ -204,11 +206,21 @@ export default function DistributorPortal() {
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
                                     <div>
                                         <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>ETA</div>
-                                        <div className="mono" style={{ fontWeight: 600 }}>{geminiResult.estimated_time_minutes ? `${Math.floor(geminiResult.estimated_time_minutes / 60)}h ${geminiResult.estimated_time_minutes % 60}m` : '—'}</div>
+                                        <div className="mono" style={{ fontWeight: 600 }}>{geminiResult.estimatedMinutes ? `${Math.floor(geminiResult.estimatedMinutes / 60)}h ${geminiResult.estimatedMinutes % 60}m` : geminiResult.estimatedTime || '—'}</div>
                                     </div>
                                     <div>
-                                        <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Priority</div>
-                                        <span className="badge badge-neutral">{geminiResult.priority}</span>
+                                        <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Dispatch State</div>
+                                        <span className={`badge ${
+                                            geminiResult.status === 'WEATHER_HOLD' || geminiResult.status === 'REJECTED'
+                                                ? 'badge-red'
+                                                : geminiResult.status === 'REROUTED' || geminiResult.status === 'HANDOFF'
+                                                    ? 'badge-yellow'
+                                                    : geminiResult.status === 'IN_TRANSIT' || geminiResult.status === 'READY_TO_LAUNCH'
+                                                        ? 'badge-green'
+                                                        : 'badge-neutral'
+                                        }`}>
+                                            {geminiResult.status?.replace(/_/g, ' ')}
+                                        </span>
                                     </div>
                                 </div>
 
@@ -219,17 +231,51 @@ export default function DistributorPortal() {
                                     </div>
                                 )}
 
+                                {geminiResult.routeWarnings?.length > 0 && (
+                                    <div style={{ marginTop: 16, padding: '10px 12px', background: '#fff7ed', borderRadius: 6, border: '1px solid #fed7aa', fontSize: 12, lineHeight: 1.6, color: '#9a3412' }}>
+                                        <strong>Weather / corridor warnings</strong>
+                                        <div style={{ marginTop: 6 }}>
+                                            {geminiResult.routeWarnings.map((warning) => (
+                                                <div key={`${warning.stationId}-${warning.title}`} style={{ marginBottom: 6 }}>
+                                                    <strong>{warning.stationId}</strong>: {warning.detail}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {geminiResult.recommendedAction && (
+                                    <div style={{ marginTop: 16, padding: '10px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                                        <strong>Recommended operator action</strong><br />
+                                        {geminiResult.recommendedAction}
+                                    </div>
+                                )}
+
                                 {isSpeaking && (
                                     <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--accent)' }}>
                                         <Volume2 size={14} /> Speaking confirmation via ElevenLabs…
                                     </div>
                                 )}
 
-                                <div className="info-box info-box-green" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <div className={`info-box ${geminiResult.status === 'WEATHER_HOLD' || geminiResult.status === 'REJECTED' ? '' : 'info-box-green'}`} style={{
+                                    marginTop: 16,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 10,
+                                    ...(geminiResult.status === 'WEATHER_HOLD' || geminiResult.status === 'REJECTED'
+                                        ? { background: 'var(--danger-light)', borderColor: '#fca5a5', color: 'var(--danger)' }
+                                        : {}),
+                                }}>
                                     <CheckCircle2 size={18} />
                                     <div>
-                                        <strong>Manifest secured and queued.</strong><br />
-                                        <span style={{ fontSize: 11 }}>Custody transaction signed. View in Ledger tab.</span>
+                                        <strong>{geminiResult.status === 'WEATHER_HOLD' ? 'Manifest queued on hold.' : geminiResult.status === 'REJECTED' ? 'Manifest blocked by policy.' : 'Manifest secured and queued.'}</strong><br />
+                                        <span style={{ fontSize: 11 }}>
+                                            {geminiResult.status === 'WEATHER_HOLD'
+                                                ? 'Dispatch is waiting for an operator reroute or better weather.'
+                                                : geminiResult.status === 'REJECTED'
+                                                    ? 'The request needs revision before it can enter the relay network.'
+                                                    : 'Custody transaction signed. View in Ledger tab.'}
+                                        </span>
                                     </div>
                                 </div>
                             </div>
