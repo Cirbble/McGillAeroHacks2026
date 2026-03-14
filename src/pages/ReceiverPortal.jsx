@@ -9,6 +9,7 @@ export default function ReceiverPortal() {
     const location = useLocation();
     const hash = location.hash || '';
     const [isSpeaking, setIsSpeaking] = useState(false);
+    const [lang, setLang] = useState('en');
 
     const inbound = deliveries.filter(d => (d.status === 'IN_TRANSIT' || d.status === 'HANDOFF') && d.currentLeg > 0).sort((a, b) => new Date(a.eta) - new Date(b.eta));
     const completed = deliveries.filter(d => d.status === 'DELIVERED').sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -18,8 +19,8 @@ export default function ReceiverPortal() {
         if (!next) return;
         setIsSpeaking(true);
         try {
-            const msg = generateArrivalAlert(next);
-            await speakText(msg);
+            const msg = generateArrivalAlert(next, lang);
+            await speakText(msg, lang);
         } catch (err) {
             console.error('ElevenLabs error:', err);
             alert('Voice alert failed: ' + err.message);
@@ -70,6 +71,19 @@ export default function ReceiverPortal() {
                                             <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>Leg {next.currentLeg}/{next.totalLegs}</span>
                                         </div>
                                     </div>
+                                </div>
+
+                                <div style={{ display: 'flex', justifyContent: 'center', gap: 4, marginBottom: 20 }}>
+                                    {[{ code: 'en', label: 'English' }, { code: 'fr', label: 'Français' }, { code: 'iu', label: 'ᐃᓄᒃᑎᑐᑦ' }].map(l => (
+                                        <button
+                                            key={l.code}
+                                            className={`toggle-btn ${lang === l.code ? 'active' : ''}`}
+                                            onClick={() => setLang(l.code)}
+                                            style={{ padding: '6px 14px', fontSize: 12 }}
+                                        >
+                                            {l.label}
+                                        </button>
+                                    ))}
                                 </div>
 
                                 <div style={{ display: 'flex', gap: 12, width: '100%', maxWidth: 420 }}>
