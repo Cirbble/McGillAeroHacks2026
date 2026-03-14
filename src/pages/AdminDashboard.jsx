@@ -214,7 +214,7 @@ function DroneFeed({ src, label, id, isVideo }) {
 }
 
 export default function AdminDashboard() {
-    const { deliveries, stations, drones, lines, addStation, addDrone } = useStore();
+    const { deliveries, stations, drones, lines, addStation, addDrone, addLine, updateLine } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
 
@@ -225,6 +225,14 @@ export default function AdminDashboard() {
     const emptyNodeForm = { id: '', type: 'transit', status: 'online', battery: 100, temp: 0, lat: '', lng: '', max_drone_capacity: 4 };
     const [showAddNode, setShowAddNode] = useState(false);
     const [nodeForm, setNodeForm] = useState(emptyNodeForm);
+    const [infraOpen, setInfraOpen] = useState({ nodes: false, drones: false, lines: false, cameras: false });
+    const toggleInfra = (key) => setInfraOpen(s => ({ ...s, [key]: !s[key] }));
+
+    const emptyLineForm = { id: '', name: '', color: '#3b82f6', stations: [] };
+    const [showLineModal, setShowLineModal] = useState(false);
+    const [lineForm, setLineForm] = useState(emptyLineForm);
+    const [editingLineId, setEditingLineId] = useState(null);
+
     const [selectedDroneId, setSelectedDroneId] = useState(null);
     const [cortexMessages, setCortexMessages] = useState([]);
     const [cortexInput, setCortexInput] = useState('');
@@ -276,6 +284,34 @@ export default function AdminDashboard() {
             setShowAddNode(false);
         } catch (err) {
             alert('Failed to add node: ' + err.message);
+        }
+    }
+
+    function openAddLine() {
+        setEditingLineId(null);
+        setLineForm(emptyLineForm);
+        setShowLineModal(true);
+    }
+
+    function openEditLine(line) {
+        setEditingLineId(line.id);
+        setLineForm({ id: line.id, name: line.name, color: line.color, stations: [...line.stations] });
+        setShowLineModal(true);
+    }
+
+    async function handleSaveLine(e) {
+        e.preventDefault();
+        try {
+            if (editingLineId) {
+                await updateLine(editingLineId, { name: lineForm.name, color: lineForm.color, stations: lineForm.stations });
+            } else {
+                await addLine({ id: lineForm.id, name: lineForm.name, color: lineForm.color, stations: lineForm.stations });
+            }
+            setShowLineModal(false);
+            setLineForm(emptyLineForm);
+            setEditingLineId(null);
+        } catch (err) {
+            alert('Failed to save line: ' + err.message);
         }
     }
 
@@ -475,103 +511,167 @@ export default function AdminDashboard() {
                 </div>
 
                 {/* Stations Table */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                    <h2 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Nodes</h2>
-                    <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 14px' }} onClick={() => setShowAddNode(true)}>+ Add Node</button>
-                </div>
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                    {stations.length === 0 ? (
-                        <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No nodes for now.</div>
-                    ) : (
-                        <table className="data-table">
-                            <thead>
-                                <tr><th>Node Name</th><th>Type</th><th>Status</th><th>Battery Array</th><th>Pad Temp</th><th>Drones</th><th>Coords</th></tr>
-                            </thead>
-                            <tbody>
-                                {stations.map(s => {
-                                    const current = drones.filter(d => d.location.toLowerCase().includes(s.id.toLowerCase().split(' ')[0])).length;
-                                    const typeLabel = s.type === 'pick_up' ? 'pick up' : s.type;
-                                    return (
-                                        <tr key={s.id}>
-                                            <td className="bold">{s.id}</td>
-                                            <td className="capitalize muted">{typeLabel}</td>
-                                            <td>
-                                                <span className={`badge ${s.status === 'online' ? 'badge-green' : s.status === 'maintenance' ? 'badge-yellow' : 'badge-neutral'}`}>
-                                                    {s.status}
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                                    <div style={{ width: 80, height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
-                                                        <div style={{ height: '100%', width: `${s.battery}%`, background: s.battery < 20 ? 'var(--danger)' : 'var(--accent)', borderRadius: 3 }} />
-                                                    </div>
-                                                    <span className="mono" style={{ fontSize: 12 }}>{s.battery}%</span>
-                                                </div>
-                                            </td>
-                                            <td className="mono">{s.temp}°C</td>
-                                            <td className="mono">{current} / {s.max_drone_capacity}</td>
-                                            <td className="mono muted" style={{ fontSize: 11 }}>{s.lat?.toFixed(4)}, {s.lng?.toFixed(4)}</td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
+                <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleInfra('nodes')}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{infraOpen.nodes ? '▾' : '▸'}</span>
+                            <h2 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Nodes</h2>
+                            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>({stations.length})</span>
+                        </div>
+                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 14px' }} onClick={e => { e.stopPropagation(); setShowAddNode(true); }}>+ Add Node</button>
+                    </div>
+                    {infraOpen.nodes && (
+                        <div style={{ borderTop: '1px solid var(--border)' }}>
+                            {stations.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No nodes for now.</div>
+                            ) : (
+                                <table className="data-table">
+                                    <thead>
+                                        <tr><th>Node Name</th><th>Type</th><th>Status</th><th>Battery Array</th><th>Pad Temp</th><th>Drones</th><th>Coords</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        {stations.map(s => {
+                                            const current = drones.filter(d => d.location.toLowerCase().includes(s.id.toLowerCase().split(' ')[0])).length;
+                                            const typeLabel = s.type === 'pick_up' ? 'pick up' : s.type;
+                                            return (
+                                                <tr key={s.id}>
+                                                    <td className="bold">{s.id}</td>
+                                                    <td className="capitalize muted">{typeLabel}</td>
+                                                    <td>
+                                                        <span className={`badge ${s.status === 'online' ? 'badge-green' : s.status === 'maintenance' ? 'badge-yellow' : 'badge-neutral'}`}>
+                                                            {s.status}
+                                                        </span>
+                                                    </td>
+                                                    <td>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                                            <div style={{ width: 80, height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+                                                                <div style={{ height: '100%', width: `${s.battery}%`, background: s.battery < 20 ? 'var(--danger)' : 'var(--accent)', borderRadius: 3 }} />
+                                                            </div>
+                                                            <span className="mono" style={{ fontSize: 12 }}>{s.battery}%</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="mono">{s.temp}°C</td>
+                                                    <td className="mono">{current} / {s.max_drone_capacity}</td>
+                                                    <td className="mono muted" style={{ fontSize: 11 }}>{s.lat?.toFixed(4)}, {s.lng?.toFixed(4)}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
                     )}
                 </div>
 
                 {/* Drones Table */}
-                <div style={{ marginTop: 28 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                        <h2 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Drones</h2>
-                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 14px' }} onClick={() => setShowAddDrone(true)}>+ Add Drone</button>
+                <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleInfra('drones')}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{infraOpen.drones ? '▾' : '▸'}</span>
+                            <h2 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Drones</h2>
+                            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>({drones.length})</span>
+                        </div>
+                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 14px' }} onClick={e => { e.stopPropagation(); setShowAddDrone(true); }}>+ Add Drone</button>
                     </div>
-                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                        {drones.length === 0 ? (
-                            <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No drones for now.</div>
-                        ) : (
-                            <table className="data-table">
-                                <thead>
-                                    <tr><th>Drone ID</th><th>Name</th><th>Model</th><th>Location</th><th>Battery</th><th>Batt. Health</th><th>Status</th><th>Target</th><th>Arrival</th></tr>
-                                </thead>
-                                <tbody>
-                                    {drones.map(d => (
-                                        <tr key={d.id}>
-                                            <td className="mono" style={{ fontWeight: 600 }}>{d.droneId}</td>
-                                            <td className="bold">{d.name}</td>
-                                            <td className="muted">{d.model}</td>
-                                            <td>{d.location}</td>
-                                            <td>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                    <div style={{ width: 60, height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
-                                                        <div style={{ height: '100%', width: `${d.battery}%`, background: d.battery < 20 ? 'var(--danger)' : 'var(--accent)', borderRadius: 3 }} />
+                    {infraOpen.drones && (
+                        <div style={{ borderTop: '1px solid var(--border)' }}>
+                            {drones.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No drones for now.</div>
+                            ) : (
+                                <table className="data-table">
+                                    <thead>
+                                        <tr><th>Drone ID</th><th>Name</th><th>Model</th><th>Location</th><th>Battery</th><th>Batt. Health</th><th>Status</th><th>Target</th><th>Arrival</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        {drones.map(d => (
+                                            <tr key={d.id}>
+                                                <td className="mono" style={{ fontWeight: 600 }}>{d.droneId}</td>
+                                                <td className="bold">{d.name}</td>
+                                                <td className="muted">{d.model}</td>
+                                                <td>{d.location}</td>
+                                                <td>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                        <div style={{ width: 60, height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+                                                            <div style={{ height: '100%', width: `${d.battery}%`, background: d.battery < 20 ? 'var(--danger)' : 'var(--accent)', borderRadius: 3 }} />
+                                                        </div>
+                                                        <span className="mono" style={{ fontSize: 12 }}>{d.battery}%</span>
                                                     </div>
-                                                    <span className="mono" style={{ fontSize: 12 }}>{d.battery}%</span>
-                                                </div>
-                                            </td>
-                                            <td className="mono">{d.batteryHealth}%</td>
-                                            <td>
-                                                <span className={`badge ${d.status === 'ready' ? 'badge-green' : d.status === 'on_route' ? 'badge-blue' : 'badge-yellow'}`}>
-                                                    {d.status === 'on_route' ? 'on route' : d.status}
-                                                </span>
-                                            </td>
-                                            <td className="muted">{d.status === 'on_route' ? d.target_location : '—'}</td>
-                                            <td className="mono">{d.status === 'on_route' ? d.time_of_arrival : '—'}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        )}
+                                                </td>
+                                                <td className="mono">{d.batteryHealth}%</td>
+                                                <td>
+                                                    <span className={`badge ${d.status === 'ready' ? 'badge-green' : d.status === 'on_route' ? 'badge-blue' : 'badge-yellow'}`}>
+                                                        {d.status === 'on_route' ? 'on route' : d.status}
+                                                    </span>
+                                                </td>
+                                                <td className="muted">{d.status === 'on_route' ? d.target_location : '—'}</td>
+                                                <td className="mono">{d.status === 'on_route' ? d.time_of_arrival : '—'}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* Lines Table */}
+                <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleInfra('lines')}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{infraOpen.lines ? '▾' : '▸'}</span>
+                            <h2 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Lines</h2>
+                            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>({lines.length})</span>
+                        </div>
+                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 14px' }} onClick={e => { e.stopPropagation(); openAddLine(); }}>+ Add Line</button>
                     </div>
+                    {infraOpen.lines && (
+                        <div style={{ borderTop: '1px solid var(--border)' }}>
+                            {lines.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No lines defined yet.</div>
+                            ) : (
+                                <table className="data-table">
+                                    <thead>
+                                        <tr><th>ID</th><th>Name</th><th>Color</th><th>Stations</th><th></th></tr>
+                                    </thead>
+                                    <tbody>
+                                        {lines.map(l => (
+                                            <tr key={l.id}>
+                                                <td className="mono" style={{ fontWeight: 600 }}>{l.id}</td>
+                                                <td className="bold">{l.name}</td>
+                                                <td>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                        <div style={{ width: 16, height: 16, borderRadius: 3, background: l.color, border: '1px solid var(--border)', flexShrink: 0 }} />
+                                                        <span className="mono" style={{ fontSize: 12 }}>{l.color}</span>
+                                                    </div>
+                                                </td>
+                                                <td className="muted" style={{ fontSize: 12 }}>{l.stations.length > 0 ? l.stations.join(', ') : '—'}</td>
+                                                <td style={{ textAlign: 'right' }}>
+                                                    <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditLine(l)}>Edit</button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {/* Station Cameras */}
-                <div style={{ marginTop: 28 }}>
-                    <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Station Cameras</h2>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-                        {surveillanceFeeds.map((feed) => (
-                            <DroneFeed key={`${feed.id}-infra`} src={feed.src} label={feed.label} id={feed.id} />
-                        ))}
+                <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleInfra('cameras')}>
+                        <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{infraOpen.cameras ? '▾' : '▸'}</span>
+                        <h2 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Station Cameras</h2>
                     </div>
+                    {infraOpen.cameras && (
+                        <div style={{ borderTop: '1px solid var(--border)', padding: 16 }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+                                {surveillanceFeeds.map((feed) => (
+                                    <DroneFeed key={`${feed.id}-infra`} src={feed.src} label={feed.label} id={feed.id} />
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Add Node Modal */}
@@ -693,6 +793,69 @@ export default function AdminDashboard() {
                                 <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 24 }}>
                                     <button type="button" className="btn btn-secondary" onClick={() => { setShowAddDrone(false); setDroneForm(emptyDroneForm); }}>Cancel</button>
                                     <button type="submit" className="btn btn-primary">Add Drone</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
+                {/* Add / Edit Line Modal */}
+                {showLineModal && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div className="card" style={{ width: 520, padding: '32px 36px', maxHeight: '90vh', overflowY: 'auto' }}>
+                            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 24 }}>{editingLineId ? 'Edit Line' : 'Add New Line'}</h2>
+                            <form onSubmit={handleSaveLine}>
+                                {!editingLineId && (
+                                    <div style={{ marginBottom: 16 }}>
+                                        <label className="form-label">Line ID</label>
+                                        <input className="form-input" required value={lineForm.id} onChange={e => setLineForm(f => ({ ...f, id: e.target.value }))} placeholder="e.g. line-north" />
+                                    </div>
+                                )}
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, marginBottom: 16, alignItems: 'end' }}>
+                                    <div>
+                                        <label className="form-label">Name</label>
+                                        <input className="form-input" required value={lineForm.name} onChange={e => setLineForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Northern Express" />
+                                    </div>
+                                    <div>
+                                        <label className="form-label">Color</label>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <input type="color" value={lineForm.color} onChange={e => setLineForm(f => ({ ...f, color: e.target.value }))} style={{ width: 40, height: 38, padding: 2, border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', background: 'var(--surface)' }} />
+                                            <input className="form-input" value={lineForm.color} onChange={e => setLineForm(f => ({ ...f, color: e.target.value }))} style={{ width: 110 }} placeholder="#3b82f6" />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style={{ marginBottom: 16 }}>
+                                    <label className="form-label">Station Order</label>
+                                    {/* Ordered selected stations */}
+                                    {lineForm.stations.length > 0 && (
+                                        <div style={{ border: '1px solid var(--border)', borderRadius: 6, marginBottom: 8, overflow: 'hidden' }}>
+                                            {lineForm.stations.map((sid, i) => (
+                                                <div key={sid} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderBottom: i < lineForm.stations.length - 1 ? '1px solid var(--border)' : 'none', background: 'var(--surface)', fontSize: 13 }}>
+                                                    <span className="mono" style={{ fontSize: 11, color: 'var(--text-tertiary)', width: 18, flexShrink: 0 }}>{i + 1}</span>
+                                                    <span style={{ flex: 1 }}>{sid}</span>
+                                                    <button type="button" disabled={i === 0} onClick={() => setLineForm(f => { const s = [...f.stations]; [s[i - 1], s[i]] = [s[i], s[i - 1]]; return { ...f, stations: s }; })} style={{ background: 'none', border: 'none', cursor: i === 0 ? 'default' : 'pointer', color: i === 0 ? 'var(--text-tertiary)' : 'var(--text)', padding: '2px 4px', fontSize: 12 }}>↑</button>
+                                                    <button type="button" disabled={i === lineForm.stations.length - 1} onClick={() => setLineForm(f => { const s = [...f.stations]; [s[i], s[i + 1]] = [s[i + 1], s[i]]; return { ...f, stations: s }; })} style={{ background: 'none', border: 'none', cursor: i === lineForm.stations.length - 1 ? 'default' : 'pointer', color: i === lineForm.stations.length - 1 ? 'var(--text-tertiary)' : 'var(--text)', padding: '2px 4px', fontSize: 12 }}>↓</button>
+                                                    <button type="button" onClick={() => setLineForm(f => ({ ...f, stations: f.stations.filter(s => s !== sid) }))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: '2px 4px', fontSize: 14, lineHeight: 1 }}>×</button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {/* Add station dropdown */}
+                                    {stations.filter(s => !lineForm.stations.includes(s.id)).length > 0 ? (
+                                        <select className="form-input" value="" onChange={e => { if (e.target.value) setLineForm(f => ({ ...f, stations: [...f.stations, e.target.value] })); }}>
+                                            <option value="">+ Add station…</option>
+                                            {stations.filter(s => !lineForm.stations.includes(s.id)).map(s => (
+                                                <option key={s.id} value={s.id}>{s.id} ({s.type})</option>
+                                            ))}
+                                        </select>
+                                    ) : (
+                                        <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>All stations added.</div>
+                                    )}
+                                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>{lineForm.stations.length} station{lineForm.stations.length !== 1 ? 's' : ''} — order defines the route</div>
+                                </div>
+                                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 24 }}>
+                                    <button type="button" className="btn btn-secondary" onClick={() => { setShowLineModal(false); setLineForm(emptyLineForm); setEditingLineId(null); }}>Cancel</button>
+                                    <button type="submit" className="btn btn-primary">{editingLineId ? 'Save Changes' : 'Add Line'}</button>
                                 </div>
                             </form>
                         </div>

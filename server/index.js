@@ -286,6 +286,22 @@ app.post('/api/lines', async (req, res) => {
     }
 });
 
+// PATCH update a line (name, color, stations)
+app.patch('/api/lines/:id', async (req, res) => {
+    try {
+        const line = await Line.findOne({ id: req.params.id });
+        if (!line) return res.status(404).json({ error: 'Line not found.' });
+        const { name, color, stations } = req.body;
+        if (name !== undefined) line.name = name;
+        if (color !== undefined) line.color = color;
+        if (stations !== undefined) line.stations = stations;
+        await line.save();
+        res.json(serializeDoc(line));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
 // PATCH update a line's stations list
 app.patch('/api/lines/:id/stations', async (req, res) => {
     try {
