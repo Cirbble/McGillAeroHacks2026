@@ -106,7 +106,7 @@ function buildRouteCoordinates(delivery, stations) {
 }
 
 /* ── Leaflet Map Component ── */
-function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], height = 380 }) {
+function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], height = 380, focusDrone = null }) {
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
 
@@ -121,11 +121,47 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], 
             }
 
             const stationsById = Object.fromEntries(stations.map(s => [s.id, s]));
-            const activeDelivery = deliveries.find(d => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(d.status));
-            const routeCoords = buildRouteCoordinates(activeDelivery, stations);
-            const dronePositions = getDroneMapPositions(drones, stations, lines);
+            const makeDroneSvg = (c) => `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><line x1="14" y1="14" x2="5" y2="5" stroke="${c}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="5" stroke="${c}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="5" y2="23" stroke="${c}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="23" stroke="${c}" stroke-width="2" stroke-linecap="round"/><circle cx="5" cy="5" r="3.5" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="23" cy="5" r="3.5" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="5" cy="23" r="3.5" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="23" cy="23" r="3.5" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="14" cy="14" r="4.5" fill="${c}" stroke="white" stroke-width="2"/></svg>`;
 
-            // Auto-center on the bounding box of all stations
+            // When a drone is focused, scope everything to that drone only
+            const focusedDrone = focusDrone ? drones.find(d => d.id === focusDrone) : null;
+            const flyingFocus = focusedDrone && ['on_route', 'relocating'].includes(focusedDrone.status);
+            const dronesForMap = focusedDrone ? [focusedDrone] : drones;
+
+            // Resolve the path for the focused flying drone
+            const activeDelivery = focusedDrone
+                ? (focusedDrone.assignment ? deliveries.find(d => d.id === focusedDrone.assignment) : null)
+                : deliveries.find(d => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(d.status));
+            const routeCoords = buildRouteCoordinates(activeDelivery, stations);
+
+            // For flying-focused drones, compute the path and which stations to show
+            let focusPathCoords = [];
+            let focusStationIds = null; // null = show all
+            if (flyingFocus) {
+                const origin = focusedDrone.status === 'relocating'
+                    ? findStationMatch(focusedDrone.origin_location, stations)
+                    : findStationMatch(focusedDrone.location, stations);
+                const target = findStationMatch(focusedDrone.target_location, stations);
+                if (focusedDrone.status === 'relocating') {
+                    if (origin && target) {
+                        focusPathCoords = [[origin.lat, origin.lng], [target.lat, target.lng]];
+                        focusStationIds = new Set([origin.id, target.id]);
+                    }
+                } else {
+                    // on_route: prefer delivery route, fall back to direct line
+                    if (routeCoords.length > 1 && activeDelivery?.route) {
+                        focusPathCoords = routeCoords;
+                        focusStationIds = new Set(activeDelivery.route);
+                    } else if (origin && target) {
+                        focusPathCoords = [[origin.lat, origin.lng], [target.lat, target.lng]];
+                        focusStationIds = new Set([origin.id, target.id]);
+                    }
+                }
+            }
+
+            const dronePositions = getDroneMapPositions(dronesForMap, stations, lines);
+
+            // Center: fit to path when flying-focused, otherwise bounding box of all stations
             const lats = stations.map(s => s.lat);
             const lngs = stations.map(s => s.lng);
             const centerLat = lats.length ? (Math.min(...lats) + Math.max(...lats)) / 2 : 52.0;
@@ -140,24 +176,45 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], 
             L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
             L.control.zoom({ position: 'topright' }).addTo(map);
 
-            // Draw each line as its own colored polyline
-            lines.forEach(line => {
-                const coords = line.stations
-                    .map(id => stationsById[id])
-                    .filter(Boolean)
-                    .map(s => [s.lat, s.lng]);
-                if (coords.length > 1) {
-                    L.polyline(coords, { color: line.color, weight: 3, opacity: 0.75 }).addTo(map);
+            if (flyingFocus) {
+                // Flying focus: only draw the drone's path, then fit view to it
+                const pathColor = focusedDrone.status === 'relocating' ? '#3b82f6' : '#f59e0b';
+                if (focusPathCoords.length > 1) {
+                    const pathLine = L.polyline(focusPathCoords, { color: pathColor, weight: 4, opacity: 0.9, dashArray: '10 6' }).addTo(map);
+                    map.fitBounds(pathLine.getBounds(), { padding: [60, 60] });
                 }
-            });
-
-            // Highlight active delivery route in amber on top
-            if (routeCoords.length > 1) {
-                L.polyline(routeCoords, { color: '#f59e0b', weight: 4, opacity: 0.9, dashArray: '10 6' }).addTo(map);
+            } else {
+                // Normal view: draw all corridor lines + active delivery route
+                lines.forEach(line => {
+                    const coords = line.stations.map(id => stationsById[id]).filter(Boolean).map(s => [s.lat, s.lng]);
+                    if (coords.length > 1) L.polyline(coords, { color: line.color, weight: 3, opacity: 0.75 }).addTo(map);
+                });
+                if (routeCoords.length > 1) {
+                    L.polyline(routeCoords, { color: '#f59e0b', weight: 4, opacity: 0.9, dashArray: '10 6' }).addTo(map);
+                }
             }
 
-            // Station markers
-            stations.forEach(station => {
+            // Focused stationary drone (ready / charging) — show on its station
+            if (focusedDrone && ['ready', 'charging'].includes(focusedDrone.status)) {
+                const station = findStationMatch(focusedDrone.location, stations);
+                if (station) {
+                    const color = focusedDrone.status === 'ready' ? '#22c55e' : '#ef4444';
+                    const icon = L.divIcon({
+                        className: '',
+                        html: `<div style="filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));">${makeDroneSvg(color)}</div>`,
+                        iconSize: [28, 28], iconAnchor: [14, 14],
+                    });
+                    L.marker([station.lat, station.lng], { icon })
+                        .addTo(map)
+                        .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${focusedDrone.id}</strong> · ${focusedDrone.name}<br/><span style="color:#64748b;">${focusedDrone.status} @ ${station.id}</span></div>`, { direction: 'top', offset: [0, -16] });
+                }
+            }
+
+            // Station markers — filtered to path stations when flying-focused
+            const stationsToRender = focusStationIds
+                ? stations.filter(s => focusStationIds.has(s.id))
+                : stations;
+            stationsToRender.forEach(station => {
                 const isActive = station.status === 'online';
                 const size = station.type === 'distribution' ? 16 : 12;
                 const anchor = size / 2;
@@ -179,7 +236,6 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], 
             });
 
             // In-transit drone markers
-            const makeDroneSvg = (color) => `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><line x1="14" y1="14" x2="5" y2="5" stroke="${color}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="5" stroke="${color}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="5" y2="23" stroke="${color}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="23" stroke="${color}" stroke-width="2" stroke-linecap="round"/><circle cx="5" cy="5" r="3.5" fill="none" stroke="${color}" stroke-width="1.5"/><circle cx="23" cy="5" r="3.5" fill="none" stroke="${color}" stroke-width="1.5"/><circle cx="5" cy="23" r="3.5" fill="none" stroke="${color}" stroke-width="1.5"/><circle cx="23" cy="23" r="3.5" fill="none" stroke="${color}" stroke-width="1.5"/><circle cx="14" cy="14" r="4.5" fill="${color}" stroke="white" stroke-width="2"/></svg>`;
             dronePositions.forEach(({ lat, lng, drone, tooltip }) => {
                 const isRelocating = drone.status === 'relocating';
                 const color = isRelocating ? '#3b82f6' : '#f59e0b';
@@ -217,7 +273,7 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], 
         }
         init();
         return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; } };
-    }, [deliveries, drones, stations, lines]);
+    }, [deliveries, drones, stations, lines, focusDrone]);
 
     return <div ref={mapRef} style={{ width: '100%', height }} />;
 }
@@ -299,6 +355,7 @@ export default function AdminDashboard() {
             await updateDrone(relocatingDrone.id, {
                 status: 'relocating',
                 target_location: relocateTarget,
+                origin_location: relocatingDrone.location,
                 location: `En route to ${relocateTarget}`,
                 time_of_arrival,
                 speed: RELOCATION_SPEED_KMH,
@@ -507,7 +564,7 @@ export default function AdminDashboard() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 16, marginBottom: 24 }}>
                     <div className="card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }}>
-                        <CorridorMap height={560} stations={orderedStations} drones={drones} deliveries={deliveries} lines={lines} />
+                        <CorridorMap height={560} stations={orderedStations} drones={drones} deliveries={deliveries} lines={lines} focusDrone={selectedDroneId} />
 
                         {/* Floating Telemetry */}
                         {selectedDrone && (

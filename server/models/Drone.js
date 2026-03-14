@@ -10,6 +10,7 @@ const DroneSchema = new mongoose.Schema({
     batteryHealth: { type: Number, required: true },
     status: { type: String, enum: ['charging', 'ready', 'on_route', 'relocating'], required: true },
     target_location: { type: String, default: null },
+    origin_location: { type: String, default: null },
     time_of_arrival: { type: String, default: null },
     assignment: { type: String, default: null },
     speed: { type: Number, default: 0 },
