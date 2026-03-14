@@ -1,19 +1,30 @@
-# McGillAeroHacks2026
+# Aero'ed
 
-Hackathon prototype for Aero'ed, a relay-corridor operations dashboard for rural medicine delivery.
+Software platform for operating drone relay corridors — enabling year-round medicine delivery to remote Northern Quebec communities through chains of charging stations.
 
-## Run
+Built for McGill AeroHacks 2026.
 
-```powershell
-node server.js
+## Setup
+
+```bash
+npm install
+cp .env.example .env   # add your API keys
+npm run dev
 ```
 
-Then open [http://127.0.0.1:4173](http://127.0.0.1:4173).
+## Environment Variables
 
-## Included in the prototype
+```
+VITE_GEMINI_API_KEY=...
+VITE_ELEVENLABS_API_KEY=...
+MONGODB_URI=...
+```
 
-- Live corridor dashboard with animated drone movement
-- Dispatch form with natural-language request field
-- Time acceleration controls and injected demo scenarios
-- Station telemetry, delivery tracking, and simulated chain-of-custody ledger
-- Sponsor-tool surfaces for Gemini, MongoDB Atlas, Snowflake, Solana, and ElevenLabs
+## Integrations
+
+- **Gemini 3.1 Flash** — AI dispatch and route optimization
+- **ElevenLabs v3** — Voice alerts for delivery arrivals
+- **MongoDB Atlas** — Real-time operational database
+- **Solana Devnet** — Chain-of-custody ledger
+- **Snowflake** — Corridor analytics
+- **Leaflet** — Interactive corridor map
