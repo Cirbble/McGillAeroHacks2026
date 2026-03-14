@@ -168,6 +168,7 @@ export default function AdminDashboard() {
     const emptyNodeForm = { id: '', type: 'transit', status: 'online', battery: 100, temp: 0, lat: '', lng: '', max_drone_capacity: 4 };
     const [showAddNode, setShowAddNode] = useState(false);
     const [nodeForm, setNodeForm] = useState(emptyNodeForm);
+    const [selectedDroneId, setSelectedDroneId] = useState(null);
     const orderedStations = orderStations(stations);
     const activeDrone = drones.find((drone) => drone.status === 'on_route') || drones[0] || null;
     const activeDelivery = deliveries.find((delivery) => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(delivery.status)) || null;
@@ -310,6 +311,11 @@ export default function AdminDashboard() {
 
     /* ── Live Operations ── */
     if (hash === '#operations') {
+        const selectedDrone = drones.find(d => d.id === selectedDroneId) || drones[0] || null;
+        const droneDelivery = selectedDrone?.assignment
+            ? deliveries.find(d => d.id === selectedDrone.assignment)
+            : activeDelivery;
+
         return (
             <div>
                 <div className="page-header">
@@ -317,66 +323,83 @@ export default function AdminDashboard() {
                     <p>Full corridor monitoring with telemetry and fleet positioning.</p>
                 </div>
 
-                <div className="card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }}>
-                    <CorridorMap height={560} stations={orderedStations} drones={drones} deliveries={deliveries} />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 16, marginBottom: 24 }}>
+                    <div className="card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }}>
+                        <CorridorMap height={520} stations={orderedStations} drones={drones} deliveries={deliveries} />
 
-                    {/* Floating Telemetry */}
-                    <div style={{ position: 'absolute', top: 16, left: 16, background: 'white', border: '1px solid var(--border)', borderRadius: 8, padding: 20, width: 240, boxShadow: 'var(--shadow-md)', zIndex: 1000 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
-                            <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Active Drone</span>
-                            <span className="mono" style={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}>{activeDrone?.id || '—'}</span>
-                        </div>
-                        {[
-                            { icon: Gauge, label: 'Speed', value: activeDrone ? `${activeDrone.speed} km/h` : '—' },
-                            { icon: Signal, label: 'Status', value: activeDrone ? activeDrone.status.replace(/_/g, ' ') : '—' },
-                            { icon: Battery, label: 'Battery', value: activeDrone ? `${activeDrone.battery}%` : '—' },
-                            { icon: Thermometer, label: 'Target', value: activeDrone?.target_location || activeDrone?.location || '—' },
-                        ].map(({ icon: Icon, label, value }) => (
-                            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, marginBottom: 8 }}>
-                                <Icon size={14} color="var(--text-secondary)" />
-                                <span style={{ flex: 1, color: 'var(--text-secondary)' }}>{label}</span>
-                                <span className="mono" style={{ fontWeight: 600 }}>{value}</span>
+                        {/* Floating Telemetry */}
+                        {selectedDrone && (
+                            <div style={{ position: 'absolute', top: 16, left: 16, background: 'white', border: '1px solid var(--border)', borderRadius: 8, padding: 20, width: 220, boxShadow: 'var(--shadow-md)', zIndex: 1000 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
+                                    <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Telemetry</span>
+                                    <span className="mono" style={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}>{selectedDrone.id}</span>
+                                </div>
+                                {[
+                                    { icon: Gauge, label: 'Speed', value: `${selectedDrone.speed} km/h` },
+                                    { icon: Signal, label: 'Status', value: selectedDrone.status.replace(/_/g, ' ') },
+                                    { icon: Battery, label: 'Battery', value: `${selectedDrone.battery}%` },
+                                    { icon: Thermometer, label: 'Location', value: selectedDrone.target_location || selectedDrone.location || '—' },
+                                ].map(({ icon: Icon, label, value }) => (
+                                    <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, marginBottom: 8 }}>
+                                        <Icon size={14} color="var(--text-secondary)" />
+                                        <span style={{ flex: 1, color: 'var(--text-secondary)' }}>{label}</span>
+                                        <span className="mono" style={{ fontWeight: 600, fontSize: 12 }}>{value}</span>
+                                    </div>
+                                ))}
+                                {selectedDrone.name && (
+                                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)' }}>
+                                        <strong style={{ color: 'var(--text)' }}>{selectedDrone.name}</strong> &middot; {selectedDrone.model}
+                                    </div>
+                                )}
                             </div>
+                        )}
+                    </div>
+
+                    {/* Fleet Selector */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 4 }}>Fleet ({drones.length})</div>
+                        {drones.map(d => (
+                            <button
+                                key={d.id}
+                                onClick={() => setSelectedDroneId(d.id)}
+                                className="card"
+                                style={{
+                                    padding: '14px 16px',
+                                    cursor: 'pointer',
+                                    border: selectedDrone?.id === d.id ? '2px solid var(--accent)' : '1px solid var(--border)',
+                                    background: selectedDrone?.id === d.id ? 'var(--accent-light)' : 'var(--surface)',
+                                    textAlign: 'left',
+                                    transition: 'all 0.15s ease',
+                                }}
+                            >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                    <span className="mono" style={{ fontSize: 13, fontWeight: 700 }}>{d.id}</span>
+                                    <span className={`badge ${d.status === 'on_route' ? 'badge-green' : d.status === 'charging' ? 'badge-yellow' : 'badge-neutral'}`} style={{ fontSize: 10 }}>
+                                        {d.status.replace(/_/g, ' ')}
+                                    </span>
+                                </div>
+                                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{d.location}</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                                    <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
+                                        <div style={{ height: '100%', width: `${d.battery}%`, background: d.battery > 30 ? 'var(--accent)' : 'var(--warning)', borderRadius: 2 }} />
+                                    </div>
+                                    <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-secondary)' }}>{d.battery}%</span>
+                                </div>
+                            </button>
                         ))}
-                        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)' }}>
-                            {activeDelivery ? (
-                                <>Routing to <strong style={{ color: 'var(--text)' }}>{activeDelivery.destination}</strong> via live corridor state</>
-                            ) : (
-                                <>No live assignment in the corridor.</>
-                            )}
-                        </div>
                     </div>
                 </div>
 
-                {/* Fleet Cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginTop: 24 }}>
-                    {drones.map(d => (
-                        <div key={d.id} className="card" style={{ padding: '20px 24px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                                <span className="mono" style={{ fontSize: 14, fontWeight: 700 }}>{d.id}</span>
-                                <span className="badge badge-neutral">{d.status}</span>
-                            </div>
-                            {[
-                                { label: 'Battery', value: `${d.battery}%`, bar: true },
-                                { label: 'Assignment', value: d.assignment || '—' },
-                                { label: 'Location', value: d.location },
-                            ].map(item => (
-                                <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-                                    <span>{item.label}</span>
-                                    {item.bar ? (
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <div style={{ width: 60, height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
-                                                <div style={{ height: '100%', width: `${d.battery}%`, background: 'var(--accent)', borderRadius: 3 }} />
-                                            </div>
-                                            <span className="mono" style={{ fontWeight: 600, color: 'var(--text)' }}>{item.value}</span>
-                                        </div>
-                                    ) : (
-                                        <span className="mono" style={{ fontWeight: 500, color: 'var(--text)' }}>{item.value}</span>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    ))}
+                {/* Drone Camera Feed */}
+                <div style={{ marginBottom: 24 }}>
+                    <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        {selectedDrone ? `${selectedDrone.id} Camera Feed` : 'Camera Feeds'}
+                    </h2>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+                        <DroneFeed src="/feeds/cam1.png" label={selectedDrone ? `${selectedDrone.id} Forward` : 'Forward'} id="CAM-01" />
+                        <DroneFeed src="/feeds/cam2.png" label={selectedDrone ? `${selectedDrone.id} Downward` : 'Downward'} id="CAM-02" />
+                        <DroneFeed src="/feeds/cam3.png" label={selectedDrone ? `${selectedDrone.location} Pad` : 'Station Pad'} id="CAM-03" />
+                    </div>
                 </div>
             </div>
         );

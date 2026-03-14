@@ -66,7 +66,10 @@ export default function Layout({ user, setUser, children }) {
                 <div className="sidebar-footer">
                     <div className="sidebar-user">
                         <div className="sidebar-avatar">{user.name.charAt(0)}</div>
-                        <span className="sidebar-username">{user.name}</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                            <span className="sidebar-username">{user.name}</span>
+                            {user.email && <span style={{ fontSize: 10, color: 'var(--text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.email}</span>}
+                        </div>
                     </div>
                     <button className="sidebar-logout" onClick={handleLogout} title="Logout">
                         <LogOut size={16} />
