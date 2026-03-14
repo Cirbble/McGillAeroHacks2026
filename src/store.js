@@ -100,6 +100,20 @@ export const useStore = create((set, get) => ({
         }
     },
 
+    addStation: async (stationData) => {
+        try {
+            const res = await fetch('/api/stations', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(stationData),
+            });
+            const newStation = await res.json();
+            set(state => ({ stations: [...state.stations, newStation] }));
+        } catch (err) {
+            console.error('Failed to add station:', err);
+        }
+    },
+
     fetchDrones: async () => {
         try {
             const res = await fetch('/api/drones');

@@ -22,29 +22,61 @@ const SEED_DRONES = [
 ];
 
 const SEED_STATIONS = [
-    { id: 'Chibougamau Hub', type: 'hub', status: 'online', battery: 100, temp: -8, lat: 49.9166, lng: -74.3680 },
-    { id: 'Mistissini', type: 'relay', status: 'online', battery: 94, temp: -14, lat: 50.4221, lng: -73.8683 },
-    { id: 'Nemaska', type: 'relay', status: 'online', battery: 88, temp: -16, lat: 51.6911, lng: -76.2356 },
-    { id: 'Waskaganish', type: 'relay', status: 'maintenance', battery: 12, temp: -19, lat: 51.4833, lng: -78.7500 },
-    { id: 'Eastmain', type: 'relay', status: 'online', battery: 91, temp: -18, lat: 52.2333, lng: -78.5167 },
-    { id: 'Wemindji', type: 'relay', status: 'online', battery: 85, temp: -20, lat: 53.0103, lng: -78.8311 },
-    { id: 'Chisasibi', type: 'destination', status: 'online', battery: 100, temp: -22, lat: 53.7940, lng: -78.9069 },
-    { id: 'Whapmagoostui', type: 'destination', status: 'online', battery: 100, temp: -25, lat: 55.2530, lng: -77.7652 },
+    { id: 'Chibougamau Hub', type: 'distribution', status: 'online', battery: 100, temp: -8, lat: 49.9166, lng: -74.3680, max_drone_capacity: 8 },
+    { id: 'Mistissini', type: 'transit', status: 'online', battery: 94, temp: -14, lat: 50.4221, lng: -73.8683, max_drone_capacity: 4 },
+    { id: 'Nemaska', type: 'transit', status: 'online', battery: 88, temp: -16, lat: 51.6911, lng: -76.2356, max_drone_capacity: 4 },
+    { id: 'Waskaganish', type: 'transit', status: 'maintenance', battery: 12, temp: -19, lat: 51.4833, lng: -78.7500, max_drone_capacity: 4 },
+    { id: 'Eastmain', type: 'transit', status: 'online', battery: 91, temp: -18, lat: 52.2333, lng: -78.5167, max_drone_capacity: 4 },
+    { id: 'Wemindji', type: 'transit', status: 'online', battery: 85, temp: -20, lat: 53.0103, lng: -78.8311, max_drone_capacity: 4 },
+    { id: 'Chisasibi', type: 'pick_up', status: 'online', battery: 100, temp: -22, lat: 53.7940, lng: -78.9069, max_drone_capacity: 6 },
+    { id: 'Whapmagoostui', type: 'pick_up', status: 'online', battery: 100, temp: -25, lat: 55.2530, lng: -77.7652, max_drone_capacity: 6 },
 ];
 
-async function seedIfEmpty() {
+async function seedData() {
+    // Drones: insert only if collection is empty
     const droneCount = await Drone.countDocuments();
     if (droneCount === 0) {
         await Drone.insertMany(SEED_DRONES);
         console.log('Seeded drones collection.');
     }
 
-    const stationCount = await Station.countDocuments();
-    if (stationCount === 0) {
-        await Station.insertMany(SEED_STATIONS);
-        console.log('Seeded stations collection.');
-    }
+    // Stations: upsert each seed record so type + max_drone_capacity stay current
+    const ops = SEED_STATIONS.map(s => ({
+        updateOne: {
+            filter: { id: s.id },
+            update: { $set: s },
+            upsert: true,
+        },
+    }));
+    await Station.bulkWrite(ops);
+    console.log('Stations synced.');
 }
+
+// GET all stations
+app.get('/api/stations', async (req, res) => {
+    try {
+        const stations = await Station.find({}, '-_id -__v -createdAt -updatedAt');
+        res.json(stations);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST add a new station
+app.post('/api/stations', async (req, res) => {
+    try {
+        const station = new Station(req.body);
+        await station.save();
+        const saved = station.toObject();
+        delete saved._id;
+        delete saved.__v;
+        delete saved.createdAt;
+        delete saved.updatedAt;
+        res.status(201).json(saved);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 // GET all drones
 app.get('/api/drones', async (req, res) => {
@@ -82,20 +114,10 @@ app.post('/api/drones', async (req, res) => {
     }
 });
 
-// GET all stations
-app.get('/api/stations', async (req, res) => {
-    try {
-        const stations = await Station.find({}, '-_id -__v -createdAt -updatedAt');
-        res.json(stations);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
 mongoose.connect(process.env.MONGODB_URI)
     .then(async () => {
         console.log('Connected to MongoDB Atlas.');
-        await seedIfEmpty();
+        await seedData();
         app.listen(3001, () => console.log('API server running on http://localhost:3001'));
     })
     .catch(err => {

@@ -97,13 +97,17 @@ function DroneFeed({ src, label, id, isVideo }) {
 }
 
 export default function AdminDashboard() {
-    const { deliveries, stations, drones, fetchStations, fetchDrones, addDrone } = useStore();
+    const { deliveries, stations, drones, fetchStations, fetchDrones, addStation, addDrone } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
 
     const emptyDroneForm = { name: '', model: '', location: '', battery: 100, batteryHealth: 100, status: 'ready', target_location: '', time_of_arrival: '' };
     const [showAddDrone, setShowAddDrone] = useState(false);
     const [droneForm, setDroneForm] = useState(emptyDroneForm);
+
+    const emptyNodeForm = { id: '', type: 'transit', status: 'online', battery: 100, temp: 0, lat: '', lng: '', max_drone_capacity: 4 };
+    const [showAddNode, setShowAddNode] = useState(false);
+    const [nodeForm, setNodeForm] = useState(emptyNodeForm);
 
     useEffect(() => { fetchStations(); fetchDrones(); }, []);
 
@@ -120,6 +124,22 @@ export default function AdminDashboard() {
         });
         setDroneForm(emptyDroneForm);
         setShowAddDrone(false);
+    }
+
+    function handleAddNode(e) {
+        e.preventDefault();
+        addStation({
+            id: nodeForm.id,
+            type: nodeForm.type,
+            status: nodeForm.status,
+            battery: Number(nodeForm.battery),
+            temp: Number(nodeForm.temp),
+            lat: Number(nodeForm.lat),
+            lng: Number(nodeForm.lng),
+            max_drone_capacity: Number(nodeForm.max_drone_capacity),
+        });
+        setNodeForm(emptyNodeForm);
+        setShowAddNode(false);
     }
 
     const active = deliveries.filter(d => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(d.status));
@@ -292,34 +312,48 @@ export default function AdminDashboard() {
                 </div>
 
                 {/* Stations Table */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <h2 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Nodes</h2>
+                    <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 14px' }} onClick={() => setShowAddNode(true)}>+ Add Node</button>
+                </div>
                 <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                    <table className="data-table">
-                        <thead>
-                            <tr><th>Node Name</th><th>Type</th><th>Status</th><th>Battery Array</th><th>Pad Temp</th><th>Drones</th></tr>
-                        </thead>
-                        <tbody>
-                            {stations.map(s => {
-                                const docked = drones.filter(d => d.location.toLowerCase().includes(s.id.toLowerCase().split(' ')[0])).length;
-                                return (
-                                    <tr key={s.id}>
-                                        <td className="bold">{s.id}</td>
-                                        <td className="capitalize muted">{s.type}</td>
-                                        <td><span className={`badge ${s.status === 'online' ? 'badge-green' : 'badge-neutral'}`}>{s.status}</span></td>
-                                        <td>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                                <div style={{ width: 80, height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
-                                                    <div style={{ height: '100%', width: `${s.battery}%`, background: 'var(--accent)', borderRadius: 3 }} />
+                    {stations.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No nodes for now.</div>
+                    ) : (
+                        <table className="data-table">
+                            <thead>
+                                <tr><th>Node Name</th><th>Type</th><th>Status</th><th>Battery Array</th><th>Pad Temp</th><th>Drones</th><th>Coords</th></tr>
+                            </thead>
+                            <tbody>
+                                {stations.map(s => {
+                                    const current = drones.filter(d => d.location.toLowerCase().includes(s.id.toLowerCase().split(' ')[0])).length;
+                                    const typeLabel = s.type === 'pick_up' ? 'pick up' : s.type;
+                                    return (
+                                        <tr key={s.id}>
+                                            <td className="bold">{s.id}</td>
+                                            <td className="capitalize muted">{typeLabel}</td>
+                                            <td>
+                                                <span className={`badge ${s.status === 'online' ? 'badge-green' : s.status === 'maintenance' ? 'badge-yellow' : 'badge-neutral'}`}>
+                                                    {s.status}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                                    <div style={{ width: 80, height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+                                                        <div style={{ height: '100%', width: `${s.battery}%`, background: s.battery < 20 ? 'var(--danger)' : 'var(--accent)', borderRadius: 3 }} />
+                                                    </div>
+                                                    <span className="mono" style={{ fontSize: 12 }}>{s.battery}%</span>
                                                 </div>
-                                                <span className="mono" style={{ fontSize: 12 }}>{s.battery}%</span>
-                                            </div>
-                                        </td>
-                                        <td className="mono">{s.temp}°C</td>
-                                        <td className="mono">{docked}</td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
+                                            </td>
+                                            <td className="mono">{s.temp}°C</td>
+                                            <td className="mono">{current} / {s.max_drone_capacity}</td>
+                                            <td className="mono muted" style={{ fontSize: 11 }}>{s.lat?.toFixed(4)}, {s.lng?.toFixed(4)}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    )}
                 </div>
 
                 {/* Drones Table */}
@@ -376,6 +410,67 @@ export default function AdminDashboard() {
                         <DroneFeed src="/feeds/cam3.png" label="Chisasibi Approach" id="CAM-03" />
                     </div>
                 </div>
+
+                {/* Add Node Modal */}
+                {showAddNode && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div className="card" style={{ width: 520, padding: '32px 36px', maxHeight: '90vh', overflowY: 'auto' }}>
+                            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 24 }}>Add New Node</h2>
+                            <form onSubmit={handleAddNode}>
+                                <div style={{ marginBottom: 16 }}>
+                                    <label className="form-label">Node Name</label>
+                                    <input className="form-input" required value={nodeForm.id} onChange={e => setNodeForm(f => ({ ...f, id: e.target.value }))} placeholder="e.g. Oujé-Bougoumou" />
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                                    <div>
+                                        <label className="form-label">Type</label>
+                                        <select className="form-input" value={nodeForm.type} onChange={e => setNodeForm(f => ({ ...f, type: e.target.value }))}>
+                                            <option value="distribution">Distribution</option>
+                                            <option value="transit">Transit</option>
+                                            <option value="pick_up">Pick Up</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="form-label">Status</label>
+                                        <select className="form-input" value={nodeForm.status} onChange={e => setNodeForm(f => ({ ...f, status: e.target.value }))}>
+                                            <option value="online">Online</option>
+                                            <option value="maintenance">Maintenance</option>
+                                            <option value="offline">Offline</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                                    <div>
+                                        <label className="form-label">Latitude</label>
+                                        <input className="form-input" type="number" step="any" required value={nodeForm.lat} onChange={e => setNodeForm(f => ({ ...f, lat: e.target.value }))} placeholder="e.g. 49.9166" />
+                                    </div>
+                                    <div>
+                                        <label className="form-label">Longitude</label>
+                                        <input className="form-input" type="number" step="any" required value={nodeForm.lng} onChange={e => setNodeForm(f => ({ ...f, lng: e.target.value }))} placeholder="e.g. -74.3680" />
+                                    </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
+                                    <div>
+                                        <label className="form-label">Max Drone Cap.</label>
+                                        <input className="form-input" type="number" min="1" required value={nodeForm.max_drone_capacity} onChange={e => setNodeForm(f => ({ ...f, max_drone_capacity: e.target.value }))} />
+                                    </div>
+                                    <div>
+                                        <label className="form-label">Battery Array (%)</label>
+                                        <input className="form-input" type="number" min="0" max="100" required value={nodeForm.battery} onChange={e => setNodeForm(f => ({ ...f, battery: e.target.value }))} />
+                                    </div>
+                                    <div>
+                                        <label className="form-label">Pad Temp (°C)</label>
+                                        <input className="form-input" type="number" required value={nodeForm.temp} onChange={e => setNodeForm(f => ({ ...f, temp: e.target.value }))} placeholder="e.g. -15" />
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 24 }}>
+                                    <button type="button" className="btn btn-secondary" onClick={() => { setShowAddNode(false); setNodeForm(emptyNodeForm); }}>Cancel</button>
+                                    <button type="submit" className="btn btn-primary">Add Node</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
 
                 {/* Add Drone Modal */}
                 {showAddDrone && (

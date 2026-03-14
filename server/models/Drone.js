@@ -13,6 +13,6 @@ const DroneSchema = new mongoose.Schema({
     time_of_arrival: { type: String, default: null },
     assignment: { type: String, default: null },
     speed: { type: Number, default: 0 },
-}, { timestamps: true });
+}, { timestamps: true, id: false });
 
 export default mongoose.model('Drone', DroneSchema);
