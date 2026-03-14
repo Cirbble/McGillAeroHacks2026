@@ -293,6 +293,128 @@ app.patch('/api/deliveries/:id/status', async (req, res) => {
     }
 });
 
+// ── Snowflake Cortex Analytics Chat ──
+app.post('/api/cortex/chat', async (req, res) => {
+    const { message, history = [] } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message required.' });
+
+    const SNOWFLAKE_URL = process.env.SNOWFLAKE_ACCOUNT_URL;
+    const SNOWFLAKE_PAT = process.env.SNOWFLAKE_PAT;
+    if (!SNOWFLAKE_URL || !SNOWFLAKE_PAT) {
+        return res.status(500).json({ error: 'Snowflake credentials not configured.' });
+    }
+
+    try {
+        // Pull live operational data for context
+        const [deliveries, stations, drones] = await Promise.all([
+            Delivery.find({}).sort({ createdAt: -1 }).limit(50).lean(),
+            Station.find({}).lean(),
+            Drone.find({}).lean(),
+        ]);
+
+        const deliverySummary = deliveries.map(d => `${d.id}: ${d.payload} from ${d.origin} to ${d.destination}, status=${d.status}, priority=${d.priority}, created=${d.createdAt}`).join('\n');
+        const stationSummary = stations.map(s => `${s.id}: type=${s.type}, status=${s.status}, battery=${s.battery}%, temp=${s.temp}°C, capacity=${s.max_drone_capacity}`).join('\n');
+        const droneSummary = drones.map(d => `${d.id} (${d.name}): model=${d.model}, status=${d.status}, battery=${d.battery}%, location=${d.location}`).join('\n');
+
+        const systemPrompt = `You are the Aero'ed Corridor Intelligence Engine — an analytics assistant for a drone relay medicine delivery corridor in Northern Quebec, Canada.
+
+You have access to LIVE operational data from the platform database. Use it to answer questions about deliveries, corridor performance, station health, fleet status, and operational analytics.
+
+LIVE DATA:
+
+DELIVERIES (${deliveries.length} records):
+${deliverySummary || 'No deliveries yet.'}
+
+STATIONS (${stations.length} nodes):
+${stationSummary || 'No stations configured.'}
+
+DRONES (${drones.length} units):
+${droneSummary || 'No drones registered.'}
+
+CONTEXT:
+- The corridor runs from Chibougamau Hub (regional hospital) through relay stations to remote Cree communities along James Bay in Northern Quebec.
+- Each drone carries sealed medicine cartridges ~20km per leg, swapping at each station. No manual handling — standardized sealed cartridge slots from one drone to the next.
+- A helicopter alternative costs $5,000-$15,000+ per trip. Aero'ed replaces those with ~$150 drone relay deliveries.
+- Station types: distribution (hub), transit (relay), pick_up (destination).
+
+DOMAIN KNOWLEDGE:
+
+THE PROBLEM:
+- 18% of Canadians live in rural/remote areas, but only 8% of physicians practice there.
+- In Ontario, 99.4% of urban residents live within 5km of a pharmacy — only 40.9% of rural residents do.
+- 72% of Northern Ontario communities have no local pharmacist access.
+- Rural Canadians face higher death rates, increased infant mortality, and shorter life expectancy.
+- Some communities are only accessible by air for months at a time (ice roads are seasonal and unreliable).
+
+RELAY CONCEPT:
+Hospital/Pharmacy -> Station A -> Station B -> Station C -> Rural Community. At each station the medicine travels in a standardized sealed cartridge that swaps between drones. Spent drone docks, fresh drone launches. Each leg is ~20km, ~20 minutes (17min flight + 3min swap).
+
+DRONE FLEET SPECS:
+- DDC Sparrow: 20-30km range, 4.5kg payload, Canadian-made, healthcare-proven.
+- DDC Robin XL: 60km range, 11.3kg payload, temperature-controlled, harsh climate rated.
+- DJI FlyCart 30: 16-26km range, 30kg payload, heavy-lift reference.
+- Flight speed: ~70 km/h. Station spacing: 15-20km.
+
+PLATFORM INTEGRATIONS:
+- Gemini API: AI dispatch, route optimization, natural language delivery requests.
+- ElevenLabs: Multilingual voice alerts (English, French, Inuktitut) for delivery arrivals.
+- MongoDB Atlas: Real-time operational database for drone states, deliveries, stations.
+- Snowflake Cortex: Analytics warehouse, corridor intelligence (this chatbot).
+- Solana: Immutable chain-of-custody ledger for controlled substances.
+- Leaflet.js: Interactive corridor map with live tracking.
+
+BUSINESS MODEL:
+- Per-delivery fee: $75-$200/delivery (distance + priority based).
+- Corridor operating contract: $500K-$2M/year per corridor from provincial health authorities.
+- Beachhead customer: Ontario Health North — ~20 remote First Nations communities along James Bay.
+- A single government corridor contract covers costs in Year 1.
+- Charter flight replacement savings for health authority: $1.5M-$5M/year per corridor.
+- Canadian drone services market projected at $5.9B by 2030.
+- ~1,200 remote/isolated communities in Canada with limited healthcare access.
+
+COMPETITIVE ADVANTAGE:
+- DDC does direct point-to-point (20-60km). Aero'ed orchestrates multi-station relay corridors.
+- Zipline uses fixed-wing (no Canadian presence). Amazon/Wing are urban last-mile only.
+- Our moat: relay corridor orchestration software — dispatch, routing, handoff tracking, chain-of-custody, analytics.
+
+Answer concisely and reference actual data from the records above. If asked about trends or statistics, compute them from the delivery records. You know everything about Aero'ed — the problem, the solution, the business model, the tech stack, and the live operational data.
+
+IMPORTANT: You may use light markdown formatting (bold, bullet points) to make answers readable. Keep answers concise — aim for 2-6 sentences.`;
+
+        const messages = [
+            { role: 'system', content: systemPrompt },
+            ...history.map(h => ({ role: h.role, content: h.content })),
+            { role: 'user', content: message },
+        ];
+
+        const cortexRes = await fetch(`${SNOWFLAKE_URL}/api/v2/cortex/v1/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${SNOWFLAKE_PAT}`,
+            },
+            body: JSON.stringify({
+                model: 'mistral-large2',
+                messages,
+                temperature: 0.3,
+                max_completion_tokens: 1024,
+            }),
+        });
+
+        if (!cortexRes.ok) {
+            const errText = await cortexRes.text();
+            console.error('Snowflake Cortex error:', cortexRes.status, errText);
+            return res.status(cortexRes.status).json({ error: `Snowflake Cortex error: ${cortexRes.status}` });
+        }
+
+        const data = await cortexRes.json();
+        const reply = data.choices?.[0]?.message?.content || 'No response from Cortex.';
+        res.json({ reply, model: data.model || 'mistral-large2' });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
 mongoose.connect(process.env.MONGODB_URI)
     .then(async () => {
         console.log('Connected to MongoDB Atlas.');

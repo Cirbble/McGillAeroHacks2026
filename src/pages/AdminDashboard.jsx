@@ -1,9 +1,22 @@
 import { useLocation } from 'react-router-dom';
 import { useStore } from '../store';
 import { useEffect, useRef, useState } from 'react';
-import { Activity, AlertTriangle, Database, Camera, Maximize2, Signal, Thermometer, Battery, Gauge } from 'lucide-react';
+import { Activity, AlertTriangle, Database, Camera, Maximize2, Signal, Thermometer, Battery, Gauge, MessageSquare, Send, Loader2 } from 'lucide-react';
 
 const CORRIDOR_ORDER = ['Chibougamau Hub', 'Mistissini', 'Nemaska', 'Waskaganish', 'Eastmain', 'Wemindji', 'Chisasibi', 'Whapmagoostui'];
+
+function renderMarkdown(text) {
+    if (!text) return '';
+    return text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/^### (.+)$/gm, '<div style="font-weight:700;font-size:13px;margin:8px 0 4px">$1</div>')
+        .replace(/^## (.+)$/gm, '<div style="font-weight:700;font-size:14px;margin:10px 0 4px">$1</div>')
+        .replace(/^[\-\*] (.+)$/gm, '<div style="padding-left:12px">• $1</div>')
+        .replace(/^(\d+)\. (.+)$/gm, '<div style="padding-left:12px">$1. $2</div>')
+        .replace(/\n/g, '<br/>');
+}
 
 function orderStations(stations) {
     return [...stations].sort((a, b) => {
@@ -169,6 +182,9 @@ export default function AdminDashboard() {
     const [showAddNode, setShowAddNode] = useState(false);
     const [nodeForm, setNodeForm] = useState(emptyNodeForm);
     const [selectedDroneId, setSelectedDroneId] = useState(null);
+    const [cortexMessages, setCortexMessages] = useState([]);
+    const [cortexInput, setCortexInput] = useState('');
+    const [cortexLoading, setCortexLoading] = useState(false);
     const orderedStations = orderStations(stations);
     const activeDrone = drones.find((drone) => drone.status === 'on_route') || drones[0] || null;
     const activeDelivery = deliveries.find((delivery) => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(delivery.status)) || null;
@@ -644,59 +660,144 @@ export default function AdminDashboard() {
 
     /* ── Analytics ── */
     if (hash === '#analytics') {
+        const handleCortexSend = async (e) => {
+            e.preventDefault();
+            if (!cortexInput.trim() || cortexLoading) return;
+            const userMsg = cortexInput.trim();
+            setCortexInput('');
+            setCortexMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+            setCortexLoading(true);
+            try {
+                const res = await fetch('/api/cortex/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: userMsg, history: cortexMessages }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Cortex request failed');
+                setCortexMessages(prev => [...prev, { role: 'assistant', content: data.reply, model: data.model }]);
+            } catch (err) {
+                setCortexMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + err.message }]);
+            } finally {
+                setCortexLoading(false);
+            }
+        };
+
+        const delivered = deliveries.filter(d => d.status === 'DELIVERED');
+        const avgTime = delivered.length > 0
+            ? Math.round(delivered.reduce((sum, d) => sum + Math.max(0, (new Date(d.createdAt).getTime() - Date.now()) / -60000), 0) / delivered.length)
+            : 0;
+
         return (
             <div>
                 <div className="page-header">
                     <h1>Corridor Analytics</h1>
-                    <p>Operational economics and efficiency metrics.</p>
+                    <p>Operational intelligence powered by Snowflake Cortex.</p>
                 </div>
 
-                <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+                <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
                     <div className="card stat-card">
-                        <div className="stat-label">Avg. Block Time</div>
-                        <div className="stat-value">1h 14m</div>
-                        <div className="stat-sub" style={{ color: 'var(--accent)' }}>18% faster than winter average</div>
+                        <div className="stat-label">Total Deliveries</div>
+                        <div className="stat-value">{deliveries.length}</div>
+                        <div className="stat-sub stat-sub-muted">{delivered.length} completed</div>
                     </div>
                     <div className="card stat-card">
-                        <div className="stat-label">Helicopter Charter Savings</div>
-                        <div className="stat-value">$421,500</div>
-                        <div className="stat-sub stat-sub-muted">Year to date, 210 sorties replaced</div>
+                        <div className="stat-label">Active Stations</div>
+                        <div className="stat-value">{stations.filter(s => s.status === 'online').length}<span className="stat-value-unit">/ {stations.length}</span></div>
+                        <div className="stat-sub stat-sub-muted">Corridor nodes</div>
                     </div>
                     <div className="card stat-card">
-                        <div className="stat-label">Payload Volume (30d)</div>
-                        <div className="stat-value">842<span className="stat-value-unit">kg</span></div>
-                        <div className="stat-sub stat-sub-muted">Across 210 successful sorties</div>
+                        <div className="stat-label">Fleet Size</div>
+                        <div className="stat-value">{drones.length}</div>
+                        <div className="stat-sub stat-sub-muted">{drones.filter(d => d.status === 'on_route').length} active</div>
                     </div>
                     <div className="card stat-card">
-                        <div className="stat-label">Renewable Energy Use</div>
-                        <div className="stat-value">84<span className="stat-value-unit">%</span></div>
-                        <div className="stat-sub" style={{ color: 'var(--accent)' }}>Solar arrays at Mistissini and Nemaska</div>
+                        <div className="stat-label">Est. Savings vs Helicopter</div>
+                        <div className="stat-value">${(delivered.length * 7500).toLocaleString()}</div>
+                        <div className="stat-sub" style={{ color: 'var(--accent)' }}>{delivered.length} flights × $7,500 avg</div>
                     </div>
                 </div>
 
-                {/* Full Manifest Table */}
-                <div className="card" style={{ padding: 0, overflow: 'hidden', marginTop: 8 }}>
-                    <div className="card-header">
-                        <span className="card-header-title"><Activity size={14} /> Full Manifest Log</span>
-                        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{deliveries.length} records</span>
+                {/* Cortex Chat */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 400px', gap: 16, marginTop: 8 }}>
+                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                        <div className="card-header">
+                            <span className="card-header-title"><Activity size={14} /> Full Manifest Log</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{deliveries.length} records</span>
+                        </div>
+                        <table className="data-table">
+                            <thead>
+                                <tr><th>Trace ID</th><th>Payload</th><th>Route</th><th>Priority</th><th>Status</th><th>Created</th></tr>
+                            </thead>
+                            <tbody>
+                                {[...deliveries].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(d => (
+                                    <tr key={d.id}>
+                                        <td className="mono">{d.id}</td>
+                                        <td className="bold">{d.payload}</td>
+                                        <td className="muted">{d.origin} → {d.destination}</td>
+                                        <td><span className="badge badge-neutral">{d.priority}</span></td>
+                                        <td><span className={`badge ${d.status === 'DELIVERED' ? 'badge-green' : 'badge-neutral'}`}>{d.status.replace(/_/g, ' ')}</span></td>
+                                        <td className="mono muted">{new Date(d.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
-                    <table className="data-table">
-                        <thead>
-                            <tr><th>Trace ID</th><th>Payload</th><th>Route</th><th>Priority</th><th>Status</th><th>Created</th></tr>
-                        </thead>
-                        <tbody>
-                            {[...deliveries].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(d => (
-                                <tr key={d.id}>
-                                    <td className="mono">{d.id}</td>
-                                    <td className="bold">{d.payload}</td>
-                                    <td className="muted">{d.origin} → {d.destination}</td>
-                                    <td><span className="badge badge-neutral">{d.priority}</span></td>
-                                    <td><span className={`badge ${d.status === 'DELIVERED' ? 'badge-green' : 'badge-neutral'}`}>{d.status.replace(/_/g, ' ')}</span></td>
-                                    <td className="mono muted">{new Date(d.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-                                </tr>
+
+                    <div className="card" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 520 }}>
+                        <div className="card-header">
+                            <span className="card-header-title"><MessageSquare size={14} /> Corridor Intelligence</span>
+                            <span style={{ fontSize: 10, padding: '2px 8px', background: '#dbeafe', color: '#2563eb', borderRadius: 4, fontWeight: 600 }}>Snowflake Cortex</span>
+                        </div>
+                        <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            {cortexMessages.length === 0 && (
+                                <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 12, padding: '40px 20px' }}>
+                                    <MessageSquare size={28} style={{ marginBottom: 10, opacity: 0.3 }} />
+                                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Ask about your corridor</div>
+                                    <div>"Which station needs maintenance?"</div>
+                                    <div>"How many deliveries today?"</div>
+                                    <div>"What's our fleet utilization?"</div>
+                                </div>
+                            )}
+                            {cortexMessages.map((msg, i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                                    <div style={{
+                                        maxWidth: '85%',
+                                        padding: '10px 14px',
+                                        borderRadius: 10,
+                                        fontSize: 13,
+                                        lineHeight: 1.6,
+                                        background: msg.role === 'user' ? 'var(--accent)' : 'var(--bg)',
+                                        color: msg.role === 'user' ? 'white' : 'var(--text)',
+                                        border: msg.role === 'user' ? 'none' : '1px solid var(--border)',
+                                    }}>
+                                        {msg.role === 'user' ? msg.content : (
+                                            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+                                        )}
+                                        {msg.model && <div style={{ fontSize: 10, marginTop: 6, opacity: 0.5 }}>{msg.model}</div>}
+                                    </div>
+                                </div>
                             ))}
-                        </tbody>
-                    </table>
+                            {cortexLoading && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                    <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Querying Snowflake Cortex…
+                                </div>
+                            )}
+                        </div>
+                        <form onSubmit={handleCortexSend} style={{ padding: 12, borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
+                            <input
+                                className="form-input"
+                                style={{ flex: 1, margin: 0 }}
+                                placeholder="Ask about corridor operations…"
+                                value={cortexInput}
+                                onChange={e => setCortexInput(e.target.value)}
+                                disabled={cortexLoading}
+                            />
+                            <button type="submit" className="btn btn-primary" style={{ padding: '8px 14px' }} disabled={cortexLoading || !cortexInput.trim()}>
+                                <Send size={14} />
+                            </button>
+                        </form>
+                    </div>
                 </div>
             </div>
         );
