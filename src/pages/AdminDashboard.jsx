@@ -53,18 +53,33 @@ function findStationMatch(label, stations) {
     )) || null;
 }
 
-function getActiveDronePosition(drone, stations) {
-    if (!drone) return null;
+function getDroneMapPositions(drones, stations, lines) {
+    const stationsById = Object.fromEntries(stations.map(s => [s.id, s]));
+    return drones
+        .filter(d => d.status === 'on_route' && d.target_location)
+        .map(drone => {
+            const target = findStationMatch(drone.target_location, stations);
+            if (!target) return null;
 
-    const station = findStationMatch(drone.target_location, stations) || findStationMatch(drone.location, stations);
-    if (!station) return null;
+            // Find the preceding station on whichever line contains the target
+            let origin = null;
+            for (const line of lines) {
+                const idx = line.stations.indexOf(target.id);
+                if (idx > 0) {
+                    origin = stationsById[line.stations[idx - 1]] || null;
+                    if (origin) break;
+                }
+            }
 
-    const offset = drone.status === 'on_route' ? 0.12 : 0;
-    return {
-        lat: station.lat + offset,
-        lng: station.lng + offset,
-        tooltip: `${drone.id}<br/><span style="color:#64748b">${drone.speed} km/h · ${drone.target_location || drone.location}</span>`,
-    };
+            const lat = origin ? (origin.lat + target.lat) / 2 : target.lat + 0.18;
+            const lng = origin ? (origin.lng + target.lng) / 2 : target.lng + 0.18;
+
+            return {
+                lat, lng, drone,
+                tooltip: `<strong>${drone.id}</strong> · ${drone.name}<br/><span style="color:#64748b">${drone.speed} km/h &rarr; ${drone.target_location}</span>`,
+            };
+        })
+        .filter(Boolean);
 }
 
 function buildRouteCoordinates(delivery, stations) {
@@ -94,10 +109,7 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], 
             const stationsById = Object.fromEntries(stations.map(s => [s.id, s]));
             const activeDelivery = deliveries.find(d => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(d.status));
             const routeCoords = buildRouteCoordinates(activeDelivery, stations);
-            const activeDronePosition = getActiveDronePosition(
-                drones.find(d => d.status === 'on_route') || drones[0],
-                stations,
-            );
+            const dronePositions = getDroneMapPositions(drones, stations, lines);
 
             // Auto-center on the bounding box of all stations
             const lats = stations.map(s => s.lat);
@@ -152,17 +164,18 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], 
                     );
             });
 
-            // Active drone marker
-            if (activeDronePosition) {
+            // In-transit drone markers
+            const droneSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><line x1="14" y1="14" x2="5" y2="5" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="5" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="5" y2="23" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="23" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/><circle cx="5" cy="5" r="3.5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><circle cx="23" cy="5" r="3.5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><circle cx="5" cy="23" r="3.5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><circle cx="23" cy="23" r="3.5" fill="none" stroke="#f59e0b" stroke-width="1.5"/><circle cx="14" cy="14" r="4.5" fill="#f59e0b" stroke="white" stroke-width="2"/></svg>`;
+            dronePositions.forEach(({ lat, lng, drone, tooltip }) => {
                 const droneIcon = L.divIcon({
                     className: '',
-                    html: `<div style="width:18px;height:18px;border-radius:50%;background:#f59e0b;border:3px solid white;box-shadow:0 0 0 4px rgba(245,158,11,0.2), 0 2px 6px rgba(0,0,0,0.2);"></div>`,
-                    iconSize: [18, 18], iconAnchor: [9, 9],
+                    html: `<div style="filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));">${droneSvg}</div>`,
+                    iconSize: [28, 28], iconAnchor: [14, 14],
                 });
-                L.marker([activeDronePosition.lat, activeDronePosition.lng], { icon: droneIcon })
+                L.marker([lat, lng], { icon: droneIcon })
                     .addTo(map)
-                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${activeDronePosition.tooltip}</strong></div>`, { direction: 'top', offset: [0, -12] });
-            }
+                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;">${tooltip}</div>`, { direction: 'top', offset: [0, -16] });
+            });
 
             // Lines legend
             if (lines.length > 0) {
@@ -214,17 +227,19 @@ function DroneFeed({ src, label, id, isVideo }) {
 }
 
 export default function AdminDashboard() {
-    const { deliveries, stations, drones, lines, addStation, addDrone, addLine, updateLine } = useStore();
+    const { deliveries, stations, drones, lines, addStation, addDrone, updateStation, updateDrone, addLine, updateLine } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
 
     const emptyDroneForm = { name: '', model: '', location: '', battery: 100, batteryHealth: 100, status: 'ready', target_location: '', time_of_arrival: '' };
     const [showAddDrone, setShowAddDrone] = useState(false);
     const [droneForm, setDroneForm] = useState(emptyDroneForm);
+    const [editingDroneId, setEditingDroneId] = useState(null);
 
     const emptyNodeForm = { id: '', type: 'transit', status: 'online', battery: 100, temp: 0, lat: '', lng: '', max_drone_capacity: 4 };
     const [showAddNode, setShowAddNode] = useState(false);
     const [nodeForm, setNodeForm] = useState(emptyNodeForm);
+    const [editingNodeId, setEditingNodeId] = useState(null);
     const [infraOpen, setInfraOpen] = useState({ nodes: false, drones: false, lines: false, cameras: false });
     const toggleInfra = (key) => setInfraOpen(s => ({ ...s, [key]: !s[key] }));
 
@@ -246,44 +261,65 @@ export default function AdminDashboard() {
         { src: '/feeds/cam3.png', label: orderedStations.at(-2) ? `${orderedStations.at(-2).id} Approach` : 'Destination Approach', id: 'CAM-03' },
     ];
 
+    function openEditDrone(drone) {
+        setEditingDroneId(drone.id);
+        setDroneForm({ name: drone.name, model: drone.model, location: drone.location, battery: drone.battery, batteryHealth: drone.batteryHealth, status: drone.status, target_location: drone.target_location || '', time_of_arrival: drone.time_of_arrival || '' });
+        setShowAddDrone(true);
+    }
+
     async function handleAddDrone(e) {
         e.preventDefault();
-
+        const payload = {
+            name: droneForm.name,
+            model: droneForm.model,
+            location: droneForm.location,
+            battery: Number(droneForm.battery),
+            batteryHealth: Number(droneForm.batteryHealth),
+            status: droneForm.status,
+            ...(droneForm.status === 'on_route' ? { target_location: droneForm.target_location, time_of_arrival: droneForm.time_of_arrival } : {}),
+        };
         try {
-            await addDrone({
-                name: droneForm.name,
-                model: droneForm.model,
-                location: droneForm.location,
-                battery: Number(droneForm.battery),
-                batteryHealth: Number(droneForm.batteryHealth),
-                status: droneForm.status,
-                ...(droneForm.status === 'on_route' ? { target_location: droneForm.target_location, time_of_arrival: droneForm.time_of_arrival } : {}),
-            });
+            if (editingDroneId) {
+                await updateDrone(editingDroneId, payload);
+            } else {
+                await addDrone(payload);
+            }
             setDroneForm(emptyDroneForm);
+            setEditingDroneId(null);
             setShowAddDrone(false);
         } catch (err) {
-            alert('Failed to add drone: ' + err.message);
+            alert('Failed to save drone: ' + err.message);
         }
+    }
+
+    function openEditNode(station) {
+        setEditingNodeId(station.id);
+        setNodeForm({ id: station.id, type: station.type, status: station.status, battery: station.battery, temp: station.temp, lat: station.lat, lng: station.lng, max_drone_capacity: station.max_drone_capacity });
+        setShowAddNode(true);
     }
 
     async function handleAddNode(e) {
         e.preventDefault();
-
+        const payload = {
+            type: nodeForm.type,
+            status: nodeForm.status,
+            battery: Number(nodeForm.battery),
+            temp: Number(nodeForm.temp),
+            lat: Number(nodeForm.lat),
+            lng: Number(nodeForm.lng),
+            max_drone_capacity: Number(nodeForm.max_drone_capacity),
+        };
         try {
-            await addStation({
-                id: nodeForm.id,
-                type: nodeForm.type,
-                status: nodeForm.status,
-                battery: Number(nodeForm.battery),
-                temp: Number(nodeForm.temp),
-                lat: Number(nodeForm.lat),
-                lng: Number(nodeForm.lng),
-                max_drone_capacity: Number(nodeForm.max_drone_capacity),
-            });
+            if (editingNodeId) {
+                await updateStation(editingNodeId, payload);
+            } else {
+                await addStation({ id: nodeForm.id, ...payload });
+            }
             setNodeForm(emptyNodeForm);
+            setEditingNodeId(null);
             setShowAddNode(false);
         } catch (err) {
-            alert('Failed to add node: ' + err.message);
+            alert('Failed to save node: ' + err.message);
         }
     }
 
@@ -527,7 +563,7 @@ export default function AdminDashboard() {
                             ) : (
                                 <table className="data-table">
                                     <thead>
-                                        <tr><th>Node Name</th><th>Type</th><th>Status</th><th>Battery Array</th><th>Pad Temp</th><th>Drones</th><th>Coords</th></tr>
+                                        <tr><th>Node Name</th><th>Type</th><th>Status</th><th>Battery Array</th><th>Pad Temp</th><th>Drones</th><th>Coords</th><th></th></tr>
                                     </thead>
                                     <tbody>
                                         {stations.map(s => {
@@ -553,6 +589,9 @@ export default function AdminDashboard() {
                                                     <td className="mono">{s.temp}°C</td>
                                                     <td className="mono">{current} / {s.max_drone_capacity}</td>
                                                     <td className="mono muted" style={{ fontSize: 11 }}>{s.lat?.toFixed(4)}, {s.lng?.toFixed(4)}</td>
+                                                    <td style={{ textAlign: 'right' }}>
+                                                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditNode(s)}>Edit</button>
+                                                    </td>
                                                 </tr>
                                             );
                                         })}
@@ -580,7 +619,7 @@ export default function AdminDashboard() {
                             ) : (
                                 <table className="data-table">
                                     <thead>
-                                        <tr><th>Drone ID</th><th>Name</th><th>Model</th><th>Location</th><th>Battery</th><th>Batt. Health</th><th>Status</th><th>Target</th><th>Arrival</th></tr>
+                                        <tr><th>Drone ID</th><th>Name</th><th>Model</th><th>Location</th><th>Battery</th><th>Batt. Health</th><th>Status</th><th>Target</th><th>Arrival</th><th></th></tr>
                                     </thead>
                                     <tbody>
                                         {drones.map(d => (
@@ -605,6 +644,9 @@ export default function AdminDashboard() {
                                                 </td>
                                                 <td className="muted">{d.status === 'on_route' ? d.target_location : '—'}</td>
                                                 <td className="mono">{d.status === 'on_route' ? d.time_of_arrival : '—'}</td>
+                                                <td style={{ textAlign: 'right' }}>
+                                                    <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditDrone(d)}>Edit</button>
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -678,12 +720,14 @@ export default function AdminDashboard() {
                 {showAddNode && (
                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <div className="card" style={{ width: 520, padding: '32px 36px', maxHeight: '90vh', overflowY: 'auto' }}>
-                            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 24 }}>Add New Node</h2>
+                            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 24 }}>{editingNodeId ? `Edit Node — ${editingNodeId}` : 'Add New Node'}</h2>
                             <form onSubmit={handleAddNode}>
-                                <div style={{ marginBottom: 16 }}>
-                                    <label className="form-label">Node Name</label>
-                                    <input className="form-input" required value={nodeForm.id} onChange={e => setNodeForm(f => ({ ...f, id: e.target.value }))} placeholder="e.g. Oujé-Bougoumou" />
-                                </div>
+                                {!editingNodeId && (
+                                    <div style={{ marginBottom: 16 }}>
+                                        <label className="form-label">Node Name</label>
+                                        <input className="form-input" required value={nodeForm.id} onChange={e => setNodeForm(f => ({ ...f, id: e.target.value }))} placeholder="e.g. Oujé-Bougoumou" />
+                                    </div>
+                                )}
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
                                     <div>
                                         <label className="form-label">Type</label>
@@ -727,8 +771,8 @@ export default function AdminDashboard() {
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 24 }}>
-                                    <button type="button" className="btn btn-secondary" onClick={() => { setShowAddNode(false); setNodeForm(emptyNodeForm); }}>Cancel</button>
-                                    <button type="submit" className="btn btn-primary">Add Node</button>
+                                    <button type="button" className="btn btn-secondary" onClick={() => { setShowAddNode(false); setNodeForm(emptyNodeForm); setEditingNodeId(null); }}>Cancel</button>
+                                    <button type="submit" className="btn btn-primary">{editingNodeId ? 'Save Changes' : 'Add Node'}</button>
                                 </div>
                             </form>
                         </div>
@@ -739,7 +783,7 @@ export default function AdminDashboard() {
                 {showAddDrone && (
                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <div className="card" style={{ width: 480, padding: '32px 36px', maxHeight: '90vh', overflowY: 'auto' }}>
-                            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 24 }}>Add New Drone</h2>
+                            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 24 }}>{editingDroneId ? `Edit Drone — ${editingDroneId}` : 'Add New Drone'}</h2>
                             <form onSubmit={handleAddDrone}>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
                                     <div>
@@ -791,8 +835,8 @@ export default function AdminDashboard() {
                                     </div>
                                 )}
                                 <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 24 }}>
-                                    <button type="button" className="btn btn-secondary" onClick={() => { setShowAddDrone(false); setDroneForm(emptyDroneForm); }}>Cancel</button>
-                                    <button type="submit" className="btn btn-primary">Add Drone</button>
+                                    <button type="button" className="btn btn-secondary" onClick={() => { setShowAddDrone(false); setDroneForm(emptyDroneForm); setEditingDroneId(null); }}>Cancel</button>
+                                    <button type="submit" className="btn btn-primary">{editingDroneId ? 'Save Changes' : 'Add Drone'}</button>
                                 </div>
                             </form>
                         </div>

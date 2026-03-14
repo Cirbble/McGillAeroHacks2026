@@ -336,6 +336,20 @@ app.post('/api/stations', async (req, res) => {
     }
 });
 
+// PATCH update a station
+app.patch('/api/stations/:id', async (req, res) => {
+    try {
+        const station = await Station.findOne({ id: req.params.id });
+        if (!station) return res.status(404).json({ error: 'Station not found.' });
+        const fields = ['type', 'status', 'battery', 'temp', 'lat', 'lng', 'max_drone_capacity'];
+        fields.forEach(f => { if (req.body[f] !== undefined) station[f] = req.body[f]; });
+        await station.save();
+        res.json(serializeDoc(station));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
 // GET all drones
 app.get('/api/drones', async (req, res) => {
     try {
@@ -362,6 +376,21 @@ app.post('/api/drones', async (req, res) => {
         });
         await drone.save();
         res.status(201).json(serializeDoc(drone));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+// PATCH update a drone
+app.patch('/api/drones/:id', async (req, res) => {
+    try {
+        const drone = await Drone.findOne({ id: req.params.id });
+        if (!drone) return res.status(404).json({ error: 'Drone not found.' });
+        const fields = ['name', 'model', 'location', 'battery', 'batteryHealth', 'status', 'target_location', 'time_of_arrival', 'speed'];
+        fields.forEach(f => { if (req.body[f] !== undefined) drone[f] = req.body[f]; });
+        if (req.body.status !== 'on_route') { drone.target_location = null; drone.time_of_arrival = null; }
+        await drone.save();
+        res.json(serializeDoc(drone));
     } catch (err) {
         sendApiError(res, err);
     }

@@ -116,6 +116,26 @@ export const useStore = create((set, get) => ({
         return drone;
     },
 
+    updateStation: async (id, updates) => {
+        const station = await requestJson(`/api/stations/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates),
+        });
+        set((state) => ({ stations: state.stations.map((s) => (s.id === id ? station : s)) }));
+        return station;
+    },
+
+    updateDrone: async (id, updates) => {
+        const drone = await requestJson(`/api/drones/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates),
+        });
+        set((state) => ({ drones: state.drones.map((d) => (d.id === id ? drone : d)) }));
+        return drone;
+    },
+
     addLine: async (lineData) => {
         const line = await requestJson('/api/lines', {
             method: 'POST',
