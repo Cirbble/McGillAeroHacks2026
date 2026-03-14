@@ -16,6 +16,7 @@ export const useStore = create((set, get) => ({
     deliveries: [],
     stations: [],
     drones: [],
+    lines: [],
     isLoading: false,
     hasInitialized: false,
     error: null,
@@ -26,16 +27,18 @@ export const useStore = create((set, get) => ({
         set({ isLoading: true, error: null });
 
         try {
-            const [deliveries, stations, drones] = await Promise.all([
+            const [deliveries, stations, drones, lines] = await Promise.all([
                 requestJson('/api/deliveries'),
                 requestJson('/api/stations'),
                 requestJson('/api/drones'),
+                requestJson('/api/lines'),
             ]);
 
             set({
                 deliveries,
                 stations,
                 drones,
+                lines,
                 hasInitialized: true,
                 isLoading: false,
                 error: null,

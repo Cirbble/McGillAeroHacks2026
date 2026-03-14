@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import Drone from './models/Drone.js';
 import Station from './models/Station.js';
 import Delivery from './models/Delivery.js';
+import Line from './models/Line.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '../.env') });
@@ -25,6 +26,15 @@ const SEED_DRONES = [
 ];
 
 const SEED_STATIONS = [
+    // ── Southern distribution hubs ──
+    { id: 'Montreal', type: 'distribution', status: 'online', battery: 100, temp: 2, lat: 45.5017, lng: -73.5673, max_drone_capacity: 12 },
+    { id: 'Quebec City', type: 'distribution', status: 'online', battery: 98, temp: -1, lat: 46.8139, lng: -71.2082, max_drone_capacity: 10 },
+    { id: 'Trois-Rivières', type: 'distribution', status: 'online', battery: 97, temp: 0, lat: 46.3432, lng: -72.5418, max_drone_capacity: 8 },
+    { id: 'Sept-Îles', type: 'distribution', status: 'online', battery: 93, temp: -8, lat: 50.2030, lng: -66.3801, max_drone_capacity: 8 },
+    { id: 'Gaspé', type: 'distribution', status: 'online', battery: 91, temp: -4, lat: 48.8282, lng: -64.4782, max_drone_capacity: 6 },
+    { id: 'Saguenay', type: 'distribution', status: 'online', battery: 96, temp: -6, lat: 48.4284, lng: -71.0537, max_drone_capacity: 8 },
+
+    // ── Main north corridor (south → north) ──
     { id: 'Chibougamau Hub', type: 'distribution', status: 'online', battery: 100, temp: -8, lat: 49.9166, lng: -74.3680, max_drone_capacity: 8 },
     { id: 'Mistissini', type: 'transit', status: 'online', battery: 94, temp: -14, lat: 50.4221, lng: -73.8683, max_drone_capacity: 4 },
     { id: 'Nemaska', type: 'transit', status: 'online', battery: 88, temp: -16, lat: 51.6911, lng: -76.2356, max_drone_capacity: 4 },
@@ -33,6 +43,62 @@ const SEED_STATIONS = [
     { id: 'Wemindji', type: 'transit', status: 'online', battery: 85, temp: -20, lat: 53.0103, lng: -78.8311, max_drone_capacity: 4 },
     { id: 'Chisasibi', type: 'pick_up', status: 'online', battery: 100, temp: -22, lat: 53.7940, lng: -78.9069, max_drone_capacity: 6 },
     { id: 'Whapmagoostui', type: 'pick_up', status: 'online', battery: 100, temp: -25, lat: 55.2530, lng: -77.7652, max_drone_capacity: 6 },
+
+    // ── Connecting transit nodes (main south–north spine) ──
+    { id: 'Shawinigan', type: 'transit', status: 'online', battery: 95, temp: -1, lat: 46.5709, lng: -72.7468, max_drone_capacity: 4 },
+    { id: 'La Tuque', type: 'transit', status: 'online', battery: 90, temp: -4, lat: 47.4457, lng: -72.7895, max_drone_capacity: 4 },
+    { id: 'Roberval', type: 'transit', status: 'online', battery: 88, temp: -7, lat: 48.5199, lng: -72.2333, max_drone_capacity: 4 },
+
+    // ── North Shore corridor (Saguenay → Rimouski → Gaspé) ──
+    { id: 'Rivière-du-Loup', type: 'transit', status: 'online', battery: 89, temp: -4, lat: 47.8337, lng: -69.5407, max_drone_capacity: 4 },
+    { id: 'Rimouski', type: 'transit', status: 'online', battery: 90, temp: -5, lat: 48.4474, lng: -68.5304, max_drone_capacity: 4 },
+    { id: 'Baie-Comeau', type: 'transit', status: 'online', battery: 87, temp: -8, lat: 49.2167, lng: -68.1500, max_drone_capacity: 6 },
+    { id: 'Matane', type: 'transit', status: 'online', battery: 86, temp: -6, lat: 48.8520, lng: -67.5270, max_drone_capacity: 4 },
+
+    // ── Sept-Îles → Whapmagoostui corridor ──
+    // Follows the Sept-Îles–Schefferville railway north, then cuts west through
+    // the LaGrande hydroelectric complex to reach James Bay.
+    { id: 'Fermont', type: 'transit', status: 'online', battery: 83, temp: -14, lat: 52.7891, lng: -67.0849, max_drone_capacity: 4 },
+    { id: 'Schefferville', type: 'transit', status: 'online', battery: 79, temp: -17, lat: 54.8029, lng: -66.8165, max_drone_capacity: 4 },
+    { id: 'LaGrande Relay', type: 'transit', status: 'online', battery: 76, temp: -20, lat: 53.7500, lng: -73.6700, max_drone_capacity: 4 },
+    { id: 'Radisson', type: 'transit', status: 'online', battery: 81, temp: -22, lat: 53.7833, lng: -77.6167, max_drone_capacity: 4 },
+
+    // ── Remote pick-up points ──
+    { id: 'Percé', type: 'pick_up', status: 'online', battery: 84, temp: -3, lat: 48.5240, lng: -64.2132, max_drone_capacity: 4 },
+    { id: 'Havre-Saint-Pierre', type: 'pick_up', status: 'online', battery: 82, temp: -10, lat: 50.2333, lng: -63.5833, max_drone_capacity: 4 },
+];
+
+const SEED_LINES = [
+    {
+        id: 'blue',
+        name: 'Blue Line',
+        color: '#2563eb',
+        stations: ['Montreal', 'Trois-Rivières', 'Shawinigan', 'La Tuque', 'Roberval', 'Chibougamau Hub', 'Mistissini', 'Nemaska', 'Waskaganish', 'Eastmain'],
+    },
+    {
+        id: 'orange',
+        name: 'Orange Line',
+        color: '#f97316',
+        stations: ['Eastmain', 'Wemindji', 'Chisasibi', 'Whapmagoostui'],
+    },
+    {
+        id: 'green',
+        name: 'Green Line',
+        color: '#16a34a',
+        stations: ['Montreal', 'Quebec City', 'Saguenay', 'Rivière-du-Loup', 'Rimouski', 'Baie-Comeau', 'Sept-Îles', 'Havre-Saint-Pierre'],
+    },
+    {
+        id: 'purple',
+        name: 'Purple Line',
+        color: '#7c3aed',
+        stations: ['Sept-Îles', 'Fermont', 'Schefferville', 'LaGrande Relay', 'Radisson', 'Chisasibi'],
+    },
+    {
+        id: 'teal',
+        name: 'Teal Line',
+        color: '#0891b2',
+        stations: ['Rimouski', 'Matane', 'Gaspé', 'Percé'],
+    },
 ];
 
 const SEED_DELIVERIES = [
@@ -181,12 +247,57 @@ async function seedData() {
     await Station.bulkWrite(ops);
     console.log('Stations synced.');
 
+    // Lines: upsert so edits to seed are reflected on restart
+    const lineOps = SEED_LINES.map(l => ({
+        updateOne: {
+            filter: { id: l.id },
+            update: { $set: l },
+            upsert: true,
+        },
+    }));
+    await Line.bulkWrite(lineOps);
+    console.log('Lines synced.');
+
     const deliveryCount = await Delivery.countDocuments();
     if (deliveryCount === 0) {
         await Delivery.insertMany(SEED_DELIVERIES);
         console.log('Seeded deliveries collection.');
     }
 }
+
+// GET all lines
+app.get('/api/lines', async (req, res) => {
+    try {
+        const lines = await Line.find({}, '-_id -__v -createdAt -updatedAt');
+        res.json(lines);
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+// POST add a new line
+app.post('/api/lines', async (req, res) => {
+    try {
+        const line = new Line(req.body);
+        await line.save();
+        res.status(201).json(serializeDoc(line));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+// PATCH update a line's stations list
+app.patch('/api/lines/:id/stations', async (req, res) => {
+    try {
+        const line = await Line.findOne({ id: req.params.id });
+        if (!line) return res.status(404).json({ error: 'Line not found.' });
+        line.stations = req.body.stations;
+        await line.save();
+        res.json(serializeDoc(line));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
 
 // GET all stations
 app.get('/api/stations', async (req, res) => {

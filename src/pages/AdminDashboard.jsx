@@ -3,7 +3,13 @@ import { useStore } from '../store';
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertTriangle, Database, Camera, Maximize2, Signal, Thermometer, Battery, Gauge, MessageSquare, Send, Loader2 } from 'lucide-react';
 
-const CORRIDOR_ORDER = ['Chibougamau Hub', 'Mistissini', 'Nemaska', 'Waskaganish', 'Eastmain', 'Wemindji', 'Chisasibi', 'Whapmagoostui'];
+// Main south-to-north delivery corridor. Stations not listed here still appear
+// as map markers but are not connected by the corridor polyline.
+const CORRIDOR_ORDER = [
+    'Montreal', 'Trois-Rivières', 'Shawinigan', 'Quebec City', 'La Tuque',
+    'Saguenay', 'Roberval', 'Chibougamau Hub', 'Mistissini', 'Nemaska',
+    'Waskaganish', 'Eastmain', 'Wemindji', 'Chisasibi', 'Whapmagoostui',
+];
 
 function renderMarkdown(text) {
     if (!text) return '';
@@ -71,7 +77,7 @@ function buildRouteCoordinates(delivery, stations) {
 }
 
 /* ── Leaflet Map Component ── */
-function CorridorMap({ stations = [], drones = [], deliveries = [], height = 380 }) {
+function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], height = 380 }) {
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
 
@@ -85,49 +91,72 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], height = 380
                 mapInstance.current = null;
             }
 
-            const orderedStations = orderStations(stations);
-            const activeDelivery = deliveries.find((delivery) => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(delivery.status));
-            const routeCoords = buildRouteCoordinates(activeDelivery, orderedStations);
+            const stationsById = Object.fromEntries(stations.map(s => [s.id, s]));
+            const activeDelivery = deliveries.find(d => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(d.status));
+            const routeCoords = buildRouteCoordinates(activeDelivery, stations);
             const activeDronePosition = getActiveDronePosition(
-                drones.find((drone) => drone.status === 'on_route') || drones[0],
-                orderedStations,
+                drones.find(d => d.status === 'on_route') || drones[0],
+                stations,
             );
-            const center = orderedStations[Math.floor(orderedStations.length / 2)] || { lat: 52.0, lng: -77.0 };
+
+            // Auto-center on the bounding box of all stations
+            const lats = stations.map(s => s.lat);
+            const lngs = stations.map(s => s.lng);
+            const centerLat = lats.length ? (Math.min(...lats) + Math.max(...lats)) / 2 : 52.0;
+            const centerLng = lngs.length ? (Math.min(...lngs) + Math.max(...lngs)) / 2 : -72.0;
+            const zoom = stations.length > 12 ? 5 : 6;
 
             const map = L.map(mapRef.current, {
-                center: [center.lat, center.lng], zoom: 6,
+                center: [centerLat, centerLng], zoom,
                 zoomControl: false, attributionControl: false,
             });
 
             L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
             L.control.zoom({ position: 'topright' }).addTo(map);
 
-            const coords = orderedStations.map((station) => [station.lat, station.lng]);
-            if (coords.length > 1) {
-                L.polyline(coords, { color: '#94a3b8', weight: 2, opacity: 0.4, dashArray: '8 6' }).addTo(map);
-            }
-            if (routeCoords.length > 1) {
-                L.polyline(routeCoords, { color: '#2563eb', weight: 3, opacity: 0.9 }).addTo(map);
-            }
-
-            orderedStations.forEach((station) => {
-                const isActive = station.status === 'online';
-                const label = getStationLabel(station);
-                const icon = L.divIcon({
-                    className: '',
-                    html: `<div style="width:${station.type === 'distribution' ? 16 : 12}px;height:${station.type === 'distribution' ? 16 : 12}px;border-radius:50%;background:${isActive ? '#2563eb' : '#94a3b8'};border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.2);"></div>`,
-                    iconSize: [station.type === 'distribution' ? 16 : 12, station.type === 'distribution' ? 16 : 12],
-                    iconAnchor: [station.type === 'distribution' ? 8 : 6, station.type === 'distribution' ? 8 : 6],
-                });
-                L.marker([station.lat, station.lng], { icon })
-                    .addTo(map)
-                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${station.id}</strong><br/><span style="color:#64748b">${label}</span></div>`, { direction: 'top', offset: [0, -10] });
+            // Draw each line as its own colored polyline
+            lines.forEach(line => {
+                const coords = line.stations
+                    .map(id => stationsById[id])
+                    .filter(Boolean)
+                    .map(s => [s.lat, s.lng]);
+                if (coords.length > 1) {
+                    L.polyline(coords, { color: line.color, weight: 3, opacity: 0.75 }).addTo(map);
+                }
             });
 
+            // Highlight active delivery route in amber on top
+            if (routeCoords.length > 1) {
+                L.polyline(routeCoords, { color: '#f59e0b', weight: 4, opacity: 0.9, dashArray: '10 6' }).addTo(map);
+            }
+
+            // Station markers
+            stations.forEach(station => {
+                const isActive = station.status === 'online';
+                const size = station.type === 'distribution' ? 16 : 12;
+                const anchor = size / 2;
+                const stationLines = lines.filter(l => l.stations.includes(station.id));
+                const markerColor = stationLines.length > 0 ? stationLines[0].color : (isActive ? '#2563eb' : '#94a3b8');
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${isActive ? markerColor : '#94a3b8'};border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.2);"></div>`,
+                    iconSize: [size, size],
+                    iconAnchor: [anchor, anchor],
+                });
+                const lineNames = stationLines.map(l => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${l.color};margin-right:3px;"></span>${l.name}`).join(' · ');
+                L.marker([station.lat, station.lng], { icon })
+                    .addTo(map)
+                    .bindTooltip(
+                        `<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${station.id}</strong><br/><span style="color:#64748b">${getStationLabel(station)}</span>${lineNames ? `<br/><span style="color:#64748b;font-size:10px;">${lineNames}</span>` : ''}</div>`,
+                        { direction: 'top', offset: [0, -10] }
+                    );
+            });
+
+            // Active drone marker
             if (activeDronePosition) {
                 const droneIcon = L.divIcon({
                     className: '',
-                    html: `<div style="width:18px;height:18px;border-radius:50%;background:#2563eb;border:3px solid white;box-shadow:0 0 0 4px rgba(37,99,235,0.2), 0 2px 6px rgba(0,0,0,0.2);"></div>`,
+                    html: `<div style="width:18px;height:18px;border-radius:50%;background:#f59e0b;border:3px solid white;box-shadow:0 0 0 4px rgba(245,158,11,0.2), 0 2px 6px rgba(0,0,0,0.2);"></div>`,
                     iconSize: [18, 18], iconAnchor: [9, 9],
                 });
                 L.marker([activeDronePosition.lat, activeDronePosition.lng], { icon: droneIcon })
@@ -135,11 +164,26 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], height = 380
                     .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${activeDronePosition.tooltip}</strong></div>`, { direction: 'top', offset: [0, -12] });
             }
 
+            // Lines legend
+            if (lines.length > 0) {
+                const legend = L.control({ position: 'bottomleft' });
+                legend.onAdd = () => {
+                    const div = L.DomUtil.create('div');
+                    div.style.cssText = 'background:white;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;font-family:Inter,sans-serif;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,0.08);min-width:130px;';
+                    div.innerHTML =
+                        `<div style="font-weight:700;margin-bottom:8px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Lines</div>` +
+                        lines.map(l => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><div style="width:22px;height:3px;background:${l.color};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">${l.name}</span></div>`).join('') +
+                        (routeCoords.length > 1 ? `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;"><div style="width:22px;height:3px;background:#f59e0b;border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">Active Route</span></div>` : '');
+                    return div;
+                };
+                legend.addTo(map);
+            }
+
             mapInstance.current = map;
         }
         init();
         return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; } };
-    }, [deliveries, drones, stations]);
+    }, [deliveries, drones, stations, lines]);
 
     return <div ref={mapRef} style={{ width: '100%', height }} />;
 }
@@ -170,7 +214,7 @@ function DroneFeed({ src, label, id, isVideo }) {
 }
 
 export default function AdminDashboard() {
-    const { deliveries, stations, drones, addStation, addDrone } = useStore();
+    const { deliveries, stations, drones, lines, addStation, addDrone } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
 
@@ -276,7 +320,7 @@ export default function AdminDashboard() {
                         <div className="card-header">
                             <span className="card-header-title"><Signal size={14} /> Northern Quebec Corridor – Live Tracking</span>
                         </div>
-                        <CorridorMap height={400} stations={orderedStations} drones={drones} deliveries={deliveries} />
+                        <CorridorMap height={400} stations={orderedStations} drones={drones} deliveries={deliveries} lines={lines} />
                     </div>
 
                     <div className="card" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -341,7 +385,7 @@ export default function AdminDashboard() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 16, marginBottom: 24 }}>
                     <div className="card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }}>
-                        <CorridorMap height={520} stations={orderedStations} drones={drones} deliveries={deliveries} />
+                        <CorridorMap height={560} stations={orderedStations} drones={drones} deliveries={deliveries} lines={lines} />
 
                         {/* Floating Telemetry */}
                         {selectedDrone && (
