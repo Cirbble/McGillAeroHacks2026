@@ -1031,13 +1031,20 @@ export default function AdminDashboard() {
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                            <div className="card-header">
+                            <div
+                                className="card-header"
+                                style={{
+                                    display: 'grid',
+                                    gap: 4,
+                                    alignItems: 'start',
+                                }}
+                            >
                                 <span className="card-header-title"><BrainCircuit size={14} /> Path Weather Report</span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                    <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--text-secondary)' }}>
+                                    <span style={{ minWidth: 0 }}>
                                         {weatherSourceLabel}{weatherUpdatedAt ? ` · ${weatherUpdatedAt}` : ''}
                                     </span>
-                                    {opsLoading && <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Refreshing…</span>}
+                                    {opsLoading && <span>Refreshing…</span>}
                                 </div>
                             </div>
                             <div style={{ padding: 16, display: 'grid', gap: 12 }}>
