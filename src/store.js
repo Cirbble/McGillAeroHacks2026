@@ -59,24 +59,9 @@ export const useStore = create((set, get) => ({
         }
     ],
 
-    // Northern Quebec stations — real coordinates
-    stations: [
-        { id: 'Chibougamau Hub', type: 'hub', status: 'online', battery: 100, temp: -8, lat: 49.9166, lng: -74.3680 },
-        { id: 'Mistissini', type: 'relay', status: 'online', battery: 94, temp: -14, lat: 50.4221, lng: -73.8683 },
-        { id: 'Nemaska', type: 'relay', status: 'online', battery: 88, temp: -16, lat: 51.6911, lng: -76.2356 },
-        { id: 'Waskaganish', type: 'relay', status: 'maintenance', battery: 12, temp: -19, lat: 51.4833, lng: -78.7500 },
-        { id: 'Eastmain', type: 'relay', status: 'online', battery: 91, temp: -18, lat: 52.2333, lng: -78.5167 },
-        { id: 'Wemindji', type: 'relay', status: 'online', battery: 85, temp: -20, lat: 53.0103, lng: -78.8311 },
-        { id: 'Chisasibi', type: 'destination', status: 'online', battery: 100, temp: -22, lat: 53.7940, lng: -78.9069 },
-        { id: 'Whapmagoostui', type: 'destination', status: 'online', battery: 100, temp: -25, lat: 55.2530, lng: -77.7652 },
-    ],
+    stations: [],
 
-    drones: [
-        { id: 'DRN-409', status: 'active', assignment: 'RLY-9082', battery: 68, speed: 72, location: 'En route to Waskaganish' },
-        { id: 'DRN-102', status: 'docked', assignment: 'RLY-9083', battery: 100, speed: 0, location: 'Mistissini' },
-        { id: 'DRN-311', status: 'charging', assignment: null, battery: 45, speed: 0, location: 'Nemaska' },
-        { id: 'DRN-205', status: 'docked', assignment: null, battery: 100, speed: 0, location: 'Chisasibi' },
-    ],
+    drones: [],
 
     addDelivery: (deliveryReq) => set((state) => {
         const newDelivery = {
@@ -104,4 +89,38 @@ export const useStore = create((set, get) => ({
             d.id === id ? { ...d, status } : d
         )
     })),
+
+    fetchStations: async () => {
+        try {
+            const res = await fetch('/api/stations');
+            const stations = await res.json();
+            set({ stations });
+        } catch (err) {
+            console.error('Failed to fetch stations:', err);
+        }
+    },
+
+    fetchDrones: async () => {
+        try {
+            const res = await fetch('/api/drones');
+            const drones = await res.json();
+            set({ drones });
+        } catch (err) {
+            console.error('Failed to fetch drones:', err);
+        }
+    },
+
+    addDrone: async (droneData) => {
+        try {
+            const res = await fetch('/api/drones', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(droneData),
+            });
+            const newDrone = await res.json();
+            set(state => ({ drones: [...state.drones, newDrone] }));
+        } catch (err) {
+            console.error('Failed to add drone:', err);
+        }
+    },
 }));

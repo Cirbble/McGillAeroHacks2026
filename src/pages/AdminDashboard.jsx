@@ -1,6 +1,6 @@
 import { useLocation } from 'react-router-dom';
 import { useStore } from '../store';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertTriangle, Database, Camera, Maximize2, Signal, Thermometer, Battery, Gauge } from 'lucide-react';
 
 /* ── Leaflet Map Component ── */
@@ -97,9 +97,30 @@ function DroneFeed({ src, label, id, isVideo }) {
 }
 
 export default function AdminDashboard() {
-    const { deliveries, stations, drones } = useStore();
+    const { deliveries, stations, drones, fetchStations, fetchDrones, addDrone } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
+
+    const emptyDroneForm = { name: '', model: '', location: '', battery: 100, batteryHealth: 100, status: 'ready', target_location: '', time_of_arrival: '' };
+    const [showAddDrone, setShowAddDrone] = useState(false);
+    const [droneForm, setDroneForm] = useState(emptyDroneForm);
+
+    useEffect(() => { fetchStations(); fetchDrones(); }, []);
+
+    function handleAddDrone(e) {
+        e.preventDefault();
+        addDrone({
+            name: droneForm.name,
+            model: droneForm.model,
+            location: droneForm.location,
+            battery: Number(droneForm.battery),
+            batteryHealth: Number(droneForm.batteryHealth),
+            status: droneForm.status,
+            ...(droneForm.status === 'on_route' ? { target_location: droneForm.target_location, time_of_arrival: droneForm.time_of_arrival } : {}),
+        });
+        setDroneForm(emptyDroneForm);
+        setShowAddDrone(false);
+    }
 
     const active = deliveries.filter(d => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(d.status));
     const onlineStations = stations.filter(s => s.status === 'online').length;
@@ -270,6 +291,7 @@ export default function AdminDashboard() {
                     <p>Landing pads, charging arrays, and relay node health.</p>
                 </div>
 
+                {/* Stations Table */}
                 <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                     <table className="data-table">
                         <thead>
@@ -300,8 +322,53 @@ export default function AdminDashboard() {
                     </table>
                 </div>
 
+                {/* Drones Table */}
+                <div style={{ marginTop: 28 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                        <h2 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>Drones</h2>
+                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 14px' }} onClick={() => setShowAddDrone(true)}>+ Add Drone</button>
+                    </div>
+                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                        {drones.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No drones for now.</div>
+                        ) : (
+                            <table className="data-table">
+                                <thead>
+                                    <tr><th>Drone ID</th><th>Name</th><th>Model</th><th>Location</th><th>Battery</th><th>Batt. Health</th><th>Status</th><th>Target</th><th>Arrival</th></tr>
+                                </thead>
+                                <tbody>
+                                    {drones.map(d => (
+                                        <tr key={d.id}>
+                                            <td className="mono" style={{ fontWeight: 600 }}>{d.droneId}</td>
+                                            <td className="bold">{d.name}</td>
+                                            <td className="muted">{d.model}</td>
+                                            <td>{d.location}</td>
+                                            <td>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                    <div style={{ width: 60, height: 5, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+                                                        <div style={{ height: '100%', width: `${d.battery}%`, background: d.battery < 20 ? 'var(--danger)' : 'var(--accent)', borderRadius: 3 }} />
+                                                    </div>
+                                                    <span className="mono" style={{ fontSize: 12 }}>{d.battery}%</span>
+                                                </div>
+                                            </td>
+                                            <td className="mono">{d.batteryHealth}%</td>
+                                            <td>
+                                                <span className={`badge ${d.status === 'ready' ? 'badge-green' : d.status === 'on_route' ? 'badge-blue' : 'badge-yellow'}`}>
+                                                    {d.status === 'on_route' ? 'on route' : d.status}
+                                                </span>
+                                            </td>
+                                            <td className="muted">{d.status === 'on_route' ? d.target_location : '—'}</td>
+                                            <td className="mono">{d.status === 'on_route' ? d.time_of_arrival : '—'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </div>
+
                 {/* Station Cameras */}
-                <div style={{ marginTop: 24 }}>
+                <div style={{ marginTop: 28 }}>
                     <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Station Cameras</h2>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
                         <DroneFeed src="/feeds/cam1.png" label="DRN-409 Forward" id="CAM-01" />
@@ -309,6 +376,65 @@ export default function AdminDashboard() {
                         <DroneFeed src="/feeds/cam3.png" label="Chisasibi Approach" id="CAM-03" />
                     </div>
                 </div>
+
+                {/* Add Drone Modal */}
+                {showAddDrone && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div className="card" style={{ width: 480, padding: '32px 36px', maxHeight: '90vh', overflowY: 'auto' }}>
+                            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 24 }}>Add New Drone</h2>
+                            <form onSubmit={handleAddDrone}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                                    <div>
+                                        <label className="form-label">Name</label>
+                                        <input className="form-input" required value={droneForm.name} onChange={e => setDroneForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Relay Echo" />
+                                    </div>
+                                    <div>
+                                        <label className="form-label">Model</label>
+                                        <input className="form-input" required value={droneForm.model} onChange={e => setDroneForm(f => ({ ...f, model: e.target.value }))} placeholder="e.g. DDC Sparrow" />
+                                    </div>
+                                </div>
+                                <div style={{ marginBottom: 16 }}>
+                                    <label className="form-label">Current Location</label>
+                                    <input className="form-input" required value={droneForm.location} onChange={e => setDroneForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. Chibougamau Hub" />
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                                    <div>
+                                        <label className="form-label">Battery (%)</label>
+                                        <input className="form-input" type="number" min="0" max="100" required value={droneForm.battery} onChange={e => setDroneForm(f => ({ ...f, battery: e.target.value }))} />
+                                    </div>
+                                    <div>
+                                        <label className="form-label">Battery Health (%)</label>
+                                        <input className="form-input" type="number" min="0" max="100" required value={droneForm.batteryHealth} onChange={e => setDroneForm(f => ({ ...f, batteryHealth: e.target.value }))} />
+                                    </div>
+                                </div>
+                                <div style={{ marginBottom: 16 }}>
+                                    <label className="form-label">Status</label>
+                                    <select className="form-input" value={droneForm.status} onChange={e => setDroneForm(f => ({ ...f, status: e.target.value }))}>
+                                        <option value="ready">Ready</option>
+                                        <option value="charging">Charging</option>
+                                        <option value="on_route">On Route</option>
+                                    </select>
+                                </div>
+                                {droneForm.status === 'on_route' && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                                        <div>
+                                            <label className="form-label">Target Location</label>
+                                            <input className="form-input" required value={droneForm.target_location} onChange={e => setDroneForm(f => ({ ...f, target_location: e.target.value }))} placeholder="e.g. Nemaska" />
+                                        </div>
+                                        <div>
+                                            <label className="form-label">Time of Arrival</label>
+                                            <input className="form-input" required value={droneForm.time_of_arrival} onChange={e => setDroneForm(f => ({ ...f, time_of_arrival: e.target.value }))} placeholder="e.g. 35 min" />
+                                        </div>
+                                    </div>
+                                )}
+                                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 24 }}>
+                                    <button type="button" className="btn btn-secondary" onClick={() => { setShowAddDrone(false); setDroneForm(emptyDroneForm); }}>Cancel</button>
+                                    <button type="submit" className="btn btn-primary">Add Drone</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }
