@@ -386,9 +386,9 @@ app.patch('/api/drones/:id', async (req, res) => {
     try {
         const drone = await Drone.findOne({ id: req.params.id });
         if (!drone) return res.status(404).json({ error: 'Drone not found.' });
-        const fields = ['name', 'model', 'location', 'battery', 'batteryHealth', 'status', 'target_location', 'time_of_arrival', 'speed', 'assignment'];
+        const fields = ['name', 'model', 'location', 'battery', 'batteryHealth', 'status', 'target_location', 'origin_location', 'time_of_arrival', 'speed', 'assignment'];
         fields.forEach(f => { if (req.body[f] !== undefined) drone[f] = req.body[f]; });
-        if (req.body.status && !['on_route', 'relocating'].includes(req.body.status)) { drone.target_location = null; drone.time_of_arrival = null; drone.speed = 0; }
+        if (req.body.status && !['on_route', 'relocating'].includes(req.body.status)) { drone.target_location = null; drone.origin_location = null; drone.time_of_arrival = null; drone.speed = 0; }
         await drone.save();
         res.json(serializeDoc(drone));
     } catch (err) {
