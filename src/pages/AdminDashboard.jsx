@@ -3,8 +3,62 @@ import { useStore } from '../store';
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertTriangle, Database, Camera, Maximize2, Signal, Thermometer, Battery, Gauge } from 'lucide-react';
 
+const CORRIDOR_ORDER = ['Chibougamau Hub', 'Mistissini', 'Nemaska', 'Waskaganish', 'Eastmain', 'Wemindji', 'Chisasibi', 'Whapmagoostui'];
+
+function orderStations(stations) {
+    return [...stations].sort((a, b) => {
+        const aIndex = CORRIDOR_ORDER.indexOf(a.id);
+        const bIndex = CORRIDOR_ORDER.indexOf(b.id);
+        return (aIndex === -1 ? Number.MAX_SAFE_INTEGER : aIndex) - (bIndex === -1 ? Number.MAX_SAFE_INTEGER : bIndex);
+    });
+}
+
+function getStationLabel(station) {
+    const baseLabel = {
+        distribution: 'HUB',
+        transit: 'RELAY',
+        pick_up: 'DESTINATION',
+    }[station.type] || station.type.toUpperCase();
+
+    if (station.status === 'maintenance') return `${baseLabel} (Maint.)`;
+    if (station.status === 'offline') return `${baseLabel} (Offline)`;
+    return baseLabel;
+}
+
+function findStationMatch(label, stations) {
+    if (!label) return null;
+
+    const normalized = label.toLowerCase();
+    return stations.find((station) => (
+        station.id.toLowerCase() === normalized || normalized.includes(station.id.toLowerCase())
+    )) || null;
+}
+
+function getActiveDronePosition(drone, stations) {
+    if (!drone) return null;
+
+    const station = findStationMatch(drone.target_location, stations) || findStationMatch(drone.location, stations);
+    if (!station) return null;
+
+    const offset = drone.status === 'on_route' ? 0.12 : 0;
+    return {
+        lat: station.lat + offset,
+        lng: station.lng + offset,
+        tooltip: `${drone.id}<br/><span style="color:#64748b">${drone.speed} km/h · ${drone.target_location || drone.location}</span>`,
+    };
+}
+
+function buildRouteCoordinates(delivery, stations) {
+    if (!delivery?.route?.length) return [];
+
+    return delivery.route
+        .map((stop) => stations.find((station) => station.id === stop))
+        .filter(Boolean)
+        .map((station) => [station.lat, station.lng]);
+}
+
 /* ── Leaflet Map Component ── */
-function CorridorMap({ height = 380 }) {
+function CorridorMap({ stations = [], drones = [], deliveries = [], height = 380 }) {
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
 
@@ -12,61 +66,67 @@ function CorridorMap({ height = 380 }) {
         async function init() {
             const L = (await import('leaflet')).default;
             await import('leaflet/dist/leaflet.css');
-            if (mapInstance.current) return;
+            if (!mapRef.current) return;
+            if (mapInstance.current) {
+                mapInstance.current.remove();
+                mapInstance.current = null;
+            }
+
+            const orderedStations = orderStations(stations);
+            const activeDelivery = deliveries.find((delivery) => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(delivery.status));
+            const routeCoords = buildRouteCoordinates(activeDelivery, orderedStations);
+            const activeDronePosition = getActiveDronePosition(
+                drones.find((drone) => drone.status === 'on_route') || drones[0],
+                orderedStations,
+            );
+            const center = orderedStations[Math.floor(orderedStations.length / 2)] || { lat: 52.0, lng: -77.0 };
 
             const map = L.map(mapRef.current, {
-                center: [52.0, -77.0], zoom: 6,
+                center: [center.lat, center.lng], zoom: 6,
                 zoomControl: false, attributionControl: false,
             });
 
             L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
             L.control.zoom({ position: 'topright' }).addTo(map);
 
-            const stations = [
-                { name: 'Chibougamau Hub', lat: 49.9166, lng: -74.3680, type: 'HUB' },
-                { name: 'Mistissini', lat: 50.4221, lng: -73.8683, type: 'RELAY' },
-                { name: 'Nemaska', lat: 51.6911, lng: -76.2356, type: 'RELAY' },
-                { name: 'Waskaganish', lat: 51.4833, lng: -78.7500, type: 'RELAY (Maint.)' },
-                { name: 'Eastmain', lat: 52.2333, lng: -78.5167, type: 'RELAY' },
-                { name: 'Wemindji', lat: 53.0103, lng: -78.8311, type: 'RELAY' },
-                { name: 'Chisasibi', lat: 53.7940, lng: -78.9069, type: 'DESTINATION' },
-                { name: 'Whapmagoostui', lat: 55.2530, lng: -77.7652, type: 'DESTINATION' },
-            ];
+            const coords = orderedStations.map((station) => [station.lat, station.lng]);
+            if (coords.length > 1) {
+                L.polyline(coords, { color: '#94a3b8', weight: 2, opacity: 0.4, dashArray: '8 6' }).addTo(map);
+            }
+            if (routeCoords.length > 1) {
+                L.polyline(routeCoords, { color: '#2563eb', weight: 3, opacity: 0.9 }).addTo(map);
+            }
 
-            const coords = stations.map(s => [s.lat, s.lng]);
-            // Full corridor polyline (dashed)
-            L.polyline(coords, { color: '#94a3b8', weight: 2, opacity: 0.4, dashArray: '8 6' }).addTo(map);
-            // Active/traversed segment (solid)
-            L.polyline(coords.slice(0, 4), { color: '#2563eb', weight: 3, opacity: 0.9 }).addTo(map);
-
-            stations.forEach(s => {
-                const isActive = s.type !== 'RELAY (Maint.)';
+            orderedStations.forEach((station) => {
+                const isActive = station.status === 'online';
+                const label = getStationLabel(station);
                 const icon = L.divIcon({
                     className: '',
-                    html: `<div style="width:${s.type === 'HUB' ? 16 : 12}px;height:${s.type === 'HUB' ? 16 : 12}px;border-radius:50%;background:${isActive ? '#2563eb' : '#94a3b8'};border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.2);"></div>`,
-                    iconSize: [s.type === 'HUB' ? 16 : 12, s.type === 'HUB' ? 16 : 12],
-                    iconAnchor: [s.type === 'HUB' ? 8 : 6, s.type === 'HUB' ? 8 : 6],
+                    html: `<div style="width:${station.type === 'distribution' ? 16 : 12}px;height:${station.type === 'distribution' ? 16 : 12}px;border-radius:50%;background:${isActive ? '#2563eb' : '#94a3b8'};border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.2);"></div>`,
+                    iconSize: [station.type === 'distribution' ? 16 : 12, station.type === 'distribution' ? 16 : 12],
+                    iconAnchor: [station.type === 'distribution' ? 8 : 6, station.type === 'distribution' ? 8 : 6],
                 });
-                L.marker([s.lat, s.lng], { icon })
+                L.marker([station.lat, station.lng], { icon })
                     .addTo(map)
-                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${s.name}</strong><br/><span style="color:#64748b">${s.type}</span></div>`, { direction: 'top', offset: [0, -10] });
+                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${station.id}</strong><br/><span style="color:#64748b">${label}</span></div>`, { direction: 'top', offset: [0, -10] });
             });
 
-            // Drone marker
-            const droneIcon = L.divIcon({
-                className: '',
-                html: `<div style="width:18px;height:18px;border-radius:50%;background:#2563eb;border:3px solid white;box-shadow:0 0 0 4px rgba(37,99,235,0.2), 0 2px 6px rgba(0,0,0,0.2);"></div>`,
-                iconSize: [18, 18], iconAnchor: [9, 9],
-            });
-            L.marker([51.2, -77.5], { icon: droneIcon })
-                .addTo(map)
-                .bindTooltip('<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>DRN-409</strong><br/><span style="color:#64748b">72 km/h · 120m</span></div>', { direction: 'top', offset: [0, -12] });
+            if (activeDronePosition) {
+                const droneIcon = L.divIcon({
+                    className: '',
+                    html: `<div style="width:18px;height:18px;border-radius:50%;background:#2563eb;border:3px solid white;box-shadow:0 0 0 4px rgba(37,99,235,0.2), 0 2px 6px rgba(0,0,0,0.2);"></div>`,
+                    iconSize: [18, 18], iconAnchor: [9, 9],
+                });
+                L.marker([activeDronePosition.lat, activeDronePosition.lng], { icon: droneIcon })
+                    .addTo(map)
+                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${activeDronePosition.tooltip}</strong></div>`, { direction: 'top', offset: [0, -12] });
+            }
 
             mapInstance.current = map;
         }
         init();
         return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; } };
-    }, []);
+    }, [deliveries, drones, stations]);
 
     return <div ref={mapRef} style={{ width: '100%', height }} />;
 }
@@ -97,7 +157,7 @@ function DroneFeed({ src, label, id, isVideo }) {
 }
 
 export default function AdminDashboard() {
-    const { deliveries, stations, drones, fetchStations, fetchDrones, addStation, addDrone } = useStore();
+    const { deliveries, stations, drones, addStation, addDrone } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
 
@@ -108,38 +168,54 @@ export default function AdminDashboard() {
     const emptyNodeForm = { id: '', type: 'transit', status: 'online', battery: 100, temp: 0, lat: '', lng: '', max_drone_capacity: 4 };
     const [showAddNode, setShowAddNode] = useState(false);
     const [nodeForm, setNodeForm] = useState(emptyNodeForm);
+    const orderedStations = orderStations(stations);
+    const activeDrone = drones.find((drone) => drone.status === 'on_route') || drones[0] || null;
+    const activeDelivery = deliveries.find((delivery) => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(delivery.status)) || null;
+    const surveillanceFeeds = [
+        { src: '/feeds/cam1.png', label: activeDrone ? `${activeDrone.id} Forward Camera` : 'Primary Drone Feed', id: 'CAM-01' },
+        { src: '/feeds/cam2.png', label: orderedStations[1] ? `${orderedStations[1].id} Landing Pad` : 'Relay Pad', id: 'CAM-02' },
+        { src: '/feeds/cam3.png', label: orderedStations.at(-2) ? `${orderedStations.at(-2).id} Approach` : 'Destination Approach', id: 'CAM-03' },
+    ];
 
-    useEffect(() => { fetchStations(); fetchDrones(); }, []);
-
-    function handleAddDrone(e) {
+    async function handleAddDrone(e) {
         e.preventDefault();
-        addDrone({
-            name: droneForm.name,
-            model: droneForm.model,
-            location: droneForm.location,
-            battery: Number(droneForm.battery),
-            batteryHealth: Number(droneForm.batteryHealth),
-            status: droneForm.status,
-            ...(droneForm.status === 'on_route' ? { target_location: droneForm.target_location, time_of_arrival: droneForm.time_of_arrival } : {}),
-        });
-        setDroneForm(emptyDroneForm);
-        setShowAddDrone(false);
+
+        try {
+            await addDrone({
+                name: droneForm.name,
+                model: droneForm.model,
+                location: droneForm.location,
+                battery: Number(droneForm.battery),
+                batteryHealth: Number(droneForm.batteryHealth),
+                status: droneForm.status,
+                ...(droneForm.status === 'on_route' ? { target_location: droneForm.target_location, time_of_arrival: droneForm.time_of_arrival } : {}),
+            });
+            setDroneForm(emptyDroneForm);
+            setShowAddDrone(false);
+        } catch (err) {
+            alert('Failed to add drone: ' + err.message);
+        }
     }
 
-    function handleAddNode(e) {
+    async function handleAddNode(e) {
         e.preventDefault();
-        addStation({
-            id: nodeForm.id,
-            type: nodeForm.type,
-            status: nodeForm.status,
-            battery: Number(nodeForm.battery),
-            temp: Number(nodeForm.temp),
-            lat: Number(nodeForm.lat),
-            lng: Number(nodeForm.lng),
-            max_drone_capacity: Number(nodeForm.max_drone_capacity),
-        });
-        setNodeForm(emptyNodeForm);
-        setShowAddNode(false);
+
+        try {
+            await addStation({
+                id: nodeForm.id,
+                type: nodeForm.type,
+                status: nodeForm.status,
+                battery: Number(nodeForm.battery),
+                temp: Number(nodeForm.temp),
+                lat: Number(nodeForm.lat),
+                lng: Number(nodeForm.lng),
+                max_drone_capacity: Number(nodeForm.max_drone_capacity),
+            });
+            setNodeForm(emptyNodeForm);
+            setShowAddNode(false);
+        } catch (err) {
+            alert('Failed to add node: ' + err.message);
+        }
     }
 
     const active = deliveries.filter(d => ['IN_TRANSIT', 'HANDOFF', 'PENDING_DISPATCH'].includes(d.status));
@@ -183,7 +259,7 @@ export default function AdminDashboard() {
                         <div className="card-header">
                             <span className="card-header-title"><Signal size={14} /> Northern Quebec Corridor – Live Tracking</span>
                         </div>
-                        <CorridorMap height={400} />
+                        <CorridorMap height={400} stations={orderedStations} drones={drones} deliveries={deliveries} />
                     </div>
 
                     <div className="card" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -223,9 +299,9 @@ export default function AdminDashboard() {
                 <div style={{ marginBottom: 24 }}>
                     <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Surveillance Feeds</h2>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-                        <DroneFeed src="/feeds/cam1.png" label="DRN-409 Forward Camera" id="CAM-01" />
-                        <DroneFeed src="/feeds/cam2.png" label="Mistissini Landing Pad" id="CAM-02" />
-                        <DroneFeed src="/feeds/cam3.png" label="Chisasibi Approach" id="CAM-03" />
+                        {surveillanceFeeds.map((feed) => (
+                            <DroneFeed key={feed.id} src={feed.src} label={feed.label} id={feed.id} />
+                        ))}
                     </div>
                 </div>
             </div>
@@ -242,19 +318,19 @@ export default function AdminDashboard() {
                 </div>
 
                 <div className="card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }}>
-                    <CorridorMap height={560} />
+                    <CorridorMap height={560} stations={orderedStations} drones={drones} deliveries={deliveries} />
 
                     {/* Floating Telemetry */}
                     <div style={{ position: 'absolute', top: 16, left: 16, background: 'white', border: '1px solid var(--border)', borderRadius: 8, padding: 20, width: 240, boxShadow: 'var(--shadow-md)', zIndex: 1000 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
                             <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Active Drone</span>
-                            <span className="mono" style={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}>DRN-409</span>
+                            <span className="mono" style={{ color: 'var(--accent)', fontWeight: 700, fontSize: 13 }}>{activeDrone?.id || '—'}</span>
                         </div>
                         {[
-                            { icon: Gauge, label: 'Speed', value: '72 km/h' },
-                            { icon: Signal, label: 'Altitude', value: '120 m' },
-                            { icon: Battery, label: 'Battery', value: '68%' },
-                            { icon: Thermometer, label: 'Ambient', value: '-12°C' },
+                            { icon: Gauge, label: 'Speed', value: activeDrone ? `${activeDrone.speed} km/h` : '—' },
+                            { icon: Signal, label: 'Status', value: activeDrone ? activeDrone.status.replace(/_/g, ' ') : '—' },
+                            { icon: Battery, label: 'Battery', value: activeDrone ? `${activeDrone.battery}%` : '—' },
+                            { icon: Thermometer, label: 'Target', value: activeDrone?.target_location || activeDrone?.location || '—' },
                         ].map(({ icon: Icon, label, value }) => (
                             <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, marginBottom: 8 }}>
                                 <Icon size={14} color="var(--text-secondary)" />
@@ -263,7 +339,11 @@ export default function AdminDashboard() {
                             </div>
                         ))}
                         <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)' }}>
-                            Routing to <strong style={{ color: 'var(--text)' }}>Chisasibi</strong> via James Bay corridor
+                            {activeDelivery ? (
+                                <>Routing to <strong style={{ color: 'var(--text)' }}>{activeDelivery.destination}</strong> via live corridor state</>
+                            ) : (
+                                <>No live assignment in the corridor.</>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -405,9 +485,9 @@ export default function AdminDashboard() {
                 <div style={{ marginTop: 28 }}>
                     <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Station Cameras</h2>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-                        <DroneFeed src="/feeds/cam1.png" label="DRN-409 Forward" id="CAM-01" />
-                        <DroneFeed src="/feeds/cam2.png" label="Mistissini Pad" id="CAM-02" />
-                        <DroneFeed src="/feeds/cam3.png" label="Chisasibi Approach" id="CAM-03" />
+                        {surveillanceFeeds.map((feed) => (
+                            <DroneFeed key={`${feed.id}-infra`} src={feed.src} label={feed.label} id={feed.id} />
+                        ))}
                     </div>
                 </div>
 

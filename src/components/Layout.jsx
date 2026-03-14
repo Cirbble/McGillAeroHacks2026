@@ -1,12 +1,21 @@
+import { useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { LayoutDashboard, Radio, Server, Activity, Send, FolderLock, Inbox, Package, LogOut } from 'lucide-react';
+import { useStore } from '../store';
 
 export default function Layout({ user, setUser, children }) {
     const navigate = useNavigate();
     const location = useLocation();
     const hash = location.hash || '';
+    const initializeData = useStore((state) => state.initializeData);
 
     const handleLogout = () => { setUser(null); navigate('/'); };
+
+    useEffect(() => {
+        initializeData().catch((err) => {
+            console.error('Failed to initialize application data:', err);
+        });
+    }, [initializeData]);
 
     const navConfig = {
         admin: [

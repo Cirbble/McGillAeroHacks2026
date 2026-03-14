@@ -14,6 +14,9 @@ export default function ReceiverPortal() {
     const inbound = deliveries.filter(d => (d.status === 'IN_TRANSIT' || d.status === 'HANDOFF') && d.currentLeg > 0).sort((a, b) => new Date(a.eta) - new Date(b.eta));
     const completed = deliveries.filter(d => d.status === 'DELIVERED').sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     const next = inbound[0];
+    const minutesToArrival = next ? Math.max(0, Math.ceil((new Date(next.eta) - Date.now()) / 60000)) : 0;
+    const countdownHours = String(Math.floor(minutesToArrival / 60)).padStart(2, '0');
+    const countdownMinutes = String(minutesToArrival % 60).padStart(2, '0');
 
     const handleVoiceAlert = async () => {
         if (!next) return;
@@ -26,6 +29,16 @@ export default function ReceiverPortal() {
             alert('Voice alert failed: ' + err.message);
         } finally {
             setIsSpeaking(false);
+        }
+    };
+
+    const handleConfirmReceipt = async () => {
+        if (!next) return;
+
+        try {
+            await updateDeliveryStatus(next.id, 'DELIVERED');
+        } catch (err) {
+            alert('Failed to update delivery status: ' + err.message);
         }
     };
 
@@ -46,7 +59,7 @@ export default function ReceiverPortal() {
                                     <Package size={26} color="var(--text)" />
                                 </div>
 
-                                <div className="countdown-display">14<span style={{ color: 'var(--text-tertiary)', opacity: 0.4 }}>:</span>22</div>
+                                <div className="countdown-display">{countdownHours}<span style={{ color: 'var(--text-tertiary)', opacity: 0.4 }}>:</span>{countdownMinutes}</div>
                                 <div className="countdown-label" style={{ marginTop: 8, marginBottom: 40 }}>Minutes to Pad Arrival</div>
 
                                 <div className="manifest-detail-card" style={{ marginBottom: 28 }}>
@@ -99,7 +112,7 @@ export default function ReceiverPortal() {
                                             <><Volume2 size={16} /> Voice Alert</>
                                         )}
                                     </button>
-                                    <button className="btn btn-primary" style={{ flex: 1, padding: 14 }} onClick={() => updateDeliveryStatus(next.id, 'DELIVERED')}>
+                                    <button className="btn btn-primary" style={{ flex: 1, padding: 14 }} onClick={handleConfirmReceipt}>
                                         <CheckCircle2 size={16} /> Confirm Receipt
                                     </button>
                                 </div>

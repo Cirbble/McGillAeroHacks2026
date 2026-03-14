@@ -6,7 +6,7 @@ import { speakText, generateDispatchConfirmation } from '../services/elevenlabs'
 import { Send, Cpu, Link as LinkIcon, Lock, CheckCircle2, Loader2, Volume2, Route } from 'lucide-react';
 
 export default function DistributorPortal() {
-    const { deliveries, addDelivery } = useStore();
+    const { deliveries, stations, addDelivery } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
 
@@ -17,7 +17,9 @@ export default function DistributorPortal() {
     const [error, setError] = useState(null);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [payload, setPayload] = useState('');
-    const [origin, setOrigin] = useState('Chibougamau Hub');
+    const distributionStations = stations.filter((station) => station.type === 'distribution');
+    const destinationStations = stations.filter((station) => station.id !== 'Chibougamau Hub');
+    const [origin, setOrigin] = useState(distributionStations[0]?.id || 'Chibougamau Hub');
     const [destination, setDestination] = useState('Chisasibi');
     const [priority, setPriority] = useState('Routine');
 
@@ -29,20 +31,20 @@ export default function DistributorPortal() {
         setError(null);
 
         try {
-            const result = await dispatchWithGemini(aiPrompt);
+            const result = await dispatchWithGemini(aiPrompt, stations);
+            const createdDelivery = await addDelivery(result);
             setGeminiResult(result);
-            addDelivery(result);
             setAiPrompt('');
 
             // Voice confirmation via ElevenLabs
             try {
                 setIsSpeaking(true);
                 const msg = generateDispatchConfirmation({
-                    id: 'RLY-' + Math.floor(1000 + Math.random() * 9000),
-                    payload: result.payload,
-                    destination: result.destination,
+                    id: createdDelivery.id,
+                    payload: createdDelivery.payload,
+                    destination: createdDelivery.destination,
                     estimatedTime: result.estimated_time_minutes ? `${Math.floor(result.estimated_time_minutes / 60)} hours, ${result.estimated_time_minutes % 60} minutes` : '2 hours',
-                    legs: result.estimated_legs,
+                    legs: createdDelivery.totalLegs,
                 });
                 await speakText(msg);
             } catch (voiceErr) {
@@ -57,11 +59,17 @@ export default function DistributorPortal() {
         }
     };
 
-    const handleManualDispatch = (e) => {
+    const handleManualDispatch = async (e) => {
         e.preventDefault();
         if (!payload) return;
-        addDelivery({ payload, origin, destination, priority });
-        setPayload('');
+        setError(null);
+
+        try {
+            await addDelivery({ payload, origin, destination, priority });
+            setPayload('');
+        } catch (err) {
+            setError(err.message);
+        }
     };
 
     const allDeliveries = [...deliveries].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -127,19 +135,29 @@ export default function DistributorPortal() {
                                         <div>
                                             <label className="form-label">Origin Hub</label>
                                             <select className="form-input" value={origin} onChange={e => setOrigin(e.target.value)}>
-                                                <option>Chibougamau Hub</option>
+                                                {distributionStations.length > 0 ? distributionStations.map((station) => (
+                                                    <option key={station.id}>{station.id}</option>
+                                                )) : (
+                                                    <option>Chibougamau Hub</option>
+                                                )}
                                             </select>
                                         </div>
                                         <div>
                                             <label className="form-label">Destination</label>
                                             <select className="form-input" value={destination} onChange={e => setDestination(e.target.value)}>
-                                                <option>Mistissini</option>
-                                                <option>Nemaska</option>
-                                                <option>Waskaganish</option>
-                                                <option>Eastmain</option>
-                                                <option>Wemindji</option>
-                                                <option>Chisasibi</option>
-                                                <option>Whapmagoostui</option>
+                                                {destinationStations.length > 0 ? destinationStations.map((station) => (
+                                                    <option key={station.id}>{station.id}</option>
+                                                )) : (
+                                                    <>
+                                                        <option>Mistissini</option>
+                                                        <option>Nemaska</option>
+                                                        <option>Waskaganish</option>
+                                                        <option>Eastmain</option>
+                                                        <option>Wemindji</option>
+                                                        <option>Chisasibi</option>
+                                                        <option>Whapmagoostui</option>
+                                                    </>
+                                                )}
                                             </select>
                                         </div>
                                     </div>
