@@ -1137,6 +1137,7 @@ export default function AdminDashboard() {
     const [dashboardWeather, setDashboardWeather] = useState(false);
 
     const [selectedDroneId, setSelectedDroneId] = useState(null);
+    const [fleetSearch, setFleetSearch] = useState('');
     const [selectedDeliveryId, setSelectedDeliveryId] = useState(null);
     const [reroutingDeliveryId, setReroutingDeliveryId] = useState(null);
     const [rerouteDecision, setRerouteDecision] = useState(null);
@@ -1991,6 +1992,38 @@ export default function AdminDashboard() {
                                             <span className="mono" style={{ fontWeight: 600, fontSize: 12 }}>{value}</span>
                                         </div>
                                     ))}
+                                    {(() => {
+                                        const inTransit = ['on_route', 'relocating'].includes(selectedDrone.status);
+                                        const remainingKm = selectedDrone.status === 'relocating'
+                                            ? selectedDroneRelocationReport?.remainingDistanceKm
+                                            : droneDelivery?.remainingDistanceKm;
+                                        const remainingMinutes = inTransit && remainingKm != null
+                                            ? Math.round(remainingKm / (selectedDrone.speed || 80) * 60)
+                                            : null;
+                                        const timeRemaining = remainingMinutes != null ? formatMinutes(remainingMinutes) : null;
+                                        const etaDate = remainingMinutes != null
+                                            ? new Date(Date.now() + remainingMinutes * 60000)
+                                            : null;
+                                        const etaDisplay = etaDate
+                                            ? etaDate.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+                                            : null;
+                                        return (
+                                            <div style={{ marginTop: 4, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'grid', gap: 6 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
+                                                    <span style={{ color: 'var(--text-secondary)' }}>Est. time of arrival</span>
+                                                    <span className="mono" style={{ fontWeight: 700, fontSize: 13, color: inTransit ? 'var(--text)' : 'var(--text-tertiary)' }}>
+                                                        {etaDisplay || '—'}
+                                                    </span>
+                                                </div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
+                                                    <span style={{ color: 'var(--text-secondary)' }}>Time remaining</span>
+                                                    <span className="mono" style={{ fontWeight: 700, fontSize: 13, color: inTransit ? 'var(--text)' : 'var(--text-tertiary)' }}>
+                                                        {timeRemaining || '—'}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)' }}>
                                         <strong style={{ color: 'var(--text)' }}>{selectedDrone.name}</strong> &middot; {selectedDrone.model}
                                     </div>
@@ -2012,7 +2045,7 @@ export default function AdminDashboard() {
                                         {selectedDrone.relocationRecommendedAction || 'Relocation corridor ready.'}
                                     </div>
                                 </div>
-                            ) : droneDelivery ? (
+                            ) : selectedDrone?.assignment && droneDelivery ? (
                                 <div style={{ display: 'grid', gap: 8 }}>
                                     <div style={{ fontSize: 14, fontWeight: 700 }}>{droneDelivery.id}</div>
                                     <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>
@@ -2023,14 +2056,26 @@ export default function AdminDashboard() {
                                     </div>
                                 </div>
                             ) : (
-                                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>No active assignment or relocation on the selected drone.</div>
+                                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>No current assignment.</div>
                             )}
                         </div>
 
                         <div className="card" style={{ padding: 18 }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 10 }}>Fleet ({displayDrones.length})</div>
-                            <div style={{ display: 'grid', gap: 2, maxHeight: 440, overflowY: 'auto' }}>
-                                {displayDrones.map(d => {
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>
+                                    Fleet ({displayDrones.length})
+                                </div>
+                            </div>
+                            <input
+                                type="text"
+                                placeholder="Search drones…"
+                                value={fleetSearch}
+                                onChange={e => setFleetSearch(e.target.value)}
+                                className="form-input"
+                                style={{ marginBottom: 8, padding: '6px 10px', fontSize: 12 }}
+                            />
+                            <div style={{ display: 'grid', gap: 2, maxHeight: 400, overflowY: 'auto' }}>
+                                {displayDrones.filter(d => d.name.toLowerCase().includes(fleetSearch.toLowerCase())).map(d => {
                                     const statusColor = d.status === 'ready' ? '#22c55e' : d.status === 'on_route' ? '#f59e0b' : d.status === 'relocating' ? '#3b82f6' : '#ef4444';
                                     const isSelected = selectedDrone?.id === d.id;
                                     return (
@@ -2053,6 +2098,9 @@ export default function AdminDashboard() {
                                         </button>
                                     );
                                 })}
+                                {displayDrones.filter(d => d.name.toLowerCase().includes(fleetSearch.toLowerCase())).length === 0 && (
+                                    <div style={{ padding: '12px 10px', fontSize: 12, color: 'var(--text-tertiary)', textAlign: 'center' }}>No drones match.</div>
+                                )}
                             </div>
                         </div>
                     </div>
