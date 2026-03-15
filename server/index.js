@@ -1442,6 +1442,90 @@ app.patch('/api/deliveries/:id/status', async (req, res) => {
     }
 });
 
+// ── Launch a delivery (assign drone, start simulation) ──
+app.post('/api/deliveries/:id/launch', async (req, res) => {
+    try {
+        const delivery = await Delivery.findOne({ id: req.params.id });
+        if (!delivery) return res.status(404).json({ error: 'Delivery not found.' });
+        if (!['READY_TO_LAUNCH', 'PENDING_DISPATCH'].includes(delivery.status)) {
+            return res.status(400).json({ error: `Cannot launch delivery with status ${delivery.status}.` });
+        }
+
+        // Find an available drone
+        const availableDrone = await Drone.findOne({ status: 'ready' });
+        if (!availableDrone) return res.status(400).json({ error: 'No available drones. All are currently assigned.' });
+
+        // Update delivery
+        delivery.status = 'IN_TRANSIT';
+        delivery.currentLeg = 1;
+        if (delivery.route && delivery.route.length > 1) {
+            delivery.lastStation = delivery.route[0];
+        }
+        await delivery.save();
+
+        // Assign drone
+        availableDrone.status = 'on_route';
+        availableDrone.assignment = delivery.id;
+        availableDrone.target_location = delivery.route && delivery.route.length > 1 ? delivery.route[1] : delivery.destination;
+        availableDrone.speed = 65 + Math.floor(Math.random() * 25);
+        await availableDrone.save();
+
+        // Start simulation: advance legs every 15 seconds
+        const simInterval = setInterval(async () => {
+            try {
+                const d = await Delivery.findOne({ id: delivery.id });
+                const drone = await Drone.findOne({ id: availableDrone.id });
+                if (!d || !drone || d.status === 'DELIVERED') {
+                    clearInterval(simInterval);
+                    return;
+                }
+
+                const nextLeg = d.currentLeg + 1;
+                if (nextLeg >= d.totalLegs) {
+                    // Delivered
+                    d.status = 'DELIVERED';
+                    d.currentLeg = d.totalLegs;
+                    d.lastStation = d.destination;
+                    await d.save();
+
+                    drone.status = 'ready';
+                    drone.assignment = null;
+                    drone.target_location = d.destination;
+                    drone.location = d.destination;
+                    drone.speed = 0;
+                    await drone.save();
+                    clearInterval(simInterval);
+                } else {
+                    d.currentLeg = nextLeg;
+                    if (d.route && d.route[nextLeg]) {
+                        d.lastStation = d.route[nextLeg - 1];
+                    }
+                    await d.save();
+
+                    if (d.route && d.route[nextLeg + 1]) {
+                        drone.target_location = d.route[nextLeg + 1];
+                    } else {
+                        drone.target_location = d.destination;
+                    }
+                    drone.speed = 65 + Math.floor(Math.random() * 25);
+                    await drone.save();
+                }
+            } catch (err) {
+                console.error('Sim error:', err.message);
+                clearInterval(simInterval);
+            }
+        }, 15000);
+
+        res.json({
+            delivery: serializeDoc(delivery),
+            drone: serializeDoc(availableDrone),
+            message: `Delivery ${delivery.id} launched. Drone ${availableDrone.id} assigned.`,
+        });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
 app.post('/api/deliveries/:id/reroute', async (req, res) => {
     try {
         const delivery = await Delivery.findOne({ id: req.params.id });
@@ -1521,6 +1605,22 @@ app.post('/api/deliveries/:id/reroute', async (req, res) => {
             },
             notification: buildAdminNotifications([serializeDoc(delivery)])[0] || null,
         });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+// ── Approve / Reject a clinic request ──
+app.patch('/api/deliveries/:id/approve', async (req, res) => {
+    try {
+        const { action } = req.body;
+        const delivery = await Delivery.findOne({ id: req.params.id });
+        if (!delivery) return res.status(404).json({ error: 'Delivery not found.' });
+        const reviewable = ['REQUESTED', 'AWAITING_REVIEW'];
+        if (!reviewable.includes(delivery.status)) return res.status(400).json({ error: 'Only pending requests can be approved/rejected.' });
+        delivery.status = action === 'approve' ? 'PENDING_DISPATCH' : 'REJECTED';
+        await delivery.save();
+        res.json(serializeDoc(delivery));
     } catch (err) {
         sendApiError(res, err);
     }

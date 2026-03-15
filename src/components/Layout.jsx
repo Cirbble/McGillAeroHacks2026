@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+﻿import { useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { LayoutDashboard, Radio, Server, Activity, Send, FolderLock, Inbox, Package, LogOut } from 'lucide-react';
+import { LayoutDashboard, Radio, Server, Activity, Send, FolderLock, Inbox, Package, LogOut, PlusCircle, ClipboardList, Map, Clock } from 'lucide-react';
 import { useStore } from '../store';
 
 export default function Layout({ user, setUser, children }) {
@@ -8,14 +8,21 @@ export default function Layout({ user, setUser, children }) {
     const location = useLocation();
     const hash = location.hash || '';
     const initializeData = useStore((state) => state.initializeData);
+    const deliveries = useStore((state) => state.deliveries);
 
     const handleLogout = () => { setUser(null); navigate('/'); };
 
     useEffect(() => {
-        initializeData().catch((err) => {
+        initializeData(true).catch((err) => {
             console.error('Failed to initialize application data:', err);
         });
-    }, [initializeData]);
+    }, [initializeData, location.pathname]);
+
+    // Notification counts
+    const pendingRequests = deliveries.filter(d => ['REQUESTED', 'AWAITING_REVIEW'].includes(d.status)).length;
+    const activeDeliveries = deliveries.filter(d => ['IN_TRANSIT', 'HANDOFF', 'READY_TO_LAUNCH', 'REROUTED', 'PENDING_DISPATCH'].includes(d.status)).length;
+    // Clinic badge: only count requests made BY the clinic (requestedBy is set), not all active deliveries
+    const clinicRequestCount = deliveries.filter(d => d.requestedBy && !['DELIVERED', 'REJECTED'].includes(d.status)).length;
 
     const navConfig = {
         admin: [
@@ -25,13 +32,18 @@ export default function Layout({ user, setUser, children }) {
             { name: 'Analytics', hash: '#analytics', icon: Activity },
         ],
         distributor: [
-            { name: 'Dispatch Console', hash: '', icon: Send },
+            { name: 'Overview', hash: '', icon: LayoutDashboard },
+            { name: 'Incoming Requests', hash: '#requests', icon: ClipboardList, badge: pendingRequests },
+            { name: 'Active Deliveries', hash: '#active', icon: Radio, badge: activeDeliveries },
+            { name: 'Dispatch Console', hash: '#dispatch', icon: Send },
             { name: 'Custody Ledger', hash: '#ledger', icon: FolderLock },
-            { name: 'Routing History', hash: '#history', icon: Inbox },
+            { name: 'History', hash: '#history', icon: Clock },
         ],
         receiver: [
-            { name: 'Inbound Traffic', hash: '', icon: Radio },
-            { name: 'Secured Inventory', hash: '#inventory', icon: Package },
+            { name: 'Dashboard', hash: '', icon: LayoutDashboard },
+            { name: 'Request Supplies', hash: '#request', icon: PlusCircle },
+            { name: 'My Requests', hash: '#tracking', icon: ClipboardList, badge: clinicRequestCount },
+            { name: 'Inventory', hash: '#inventory', icon: Package },
         ],
     };
 
@@ -59,6 +71,20 @@ export default function Layout({ user, setUser, children }) {
                         >
                             <link.icon size={16} />
                             {link.name}
+                            {link.badge > 0 && (
+                                <span style={{
+                                    marginLeft: 'auto',
+                                    background: '#ef4444',
+                                    color: 'white',
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    borderRadius: 10,
+                                    padding: '1px 7px',
+                                    minWidth: 18,
+                                    textAlign: 'center',
+                                    lineHeight: '16px',
+                                }}>{link.badge}</span>
+                            )}
                         </Link>
                     ))}
                 </nav>
@@ -85,9 +111,7 @@ export default function Layout({ user, setUser, children }) {
                         <span className="topbar-breadcrumb-sep">/</span>
                         <span className="topbar-breadcrumb-current">{currentLink.name}</span>
                     </div>
-                    <div className="topbar-right">
-                        <span className="status-dot">Network Online</span>
-                    </div>
+                    <div className="topbar-right" />
                 </header>
 
                 <div className="page-content">
