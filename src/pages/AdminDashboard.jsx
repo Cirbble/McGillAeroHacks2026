@@ -1494,78 +1494,66 @@ export default function AdminDashboard() {
 
     /* ── Platform Overview ── */
     if (hash === '') {
+        const canReroute = selectedDelivery
+            && ['WEATHER_HOLD', 'REROUTED', 'IN_TRANSIT', 'HANDOFF', 'READY_TO_LAUNCH'].includes(selectedDelivery.status)
+            && pathReport;
+
         return (
             <div>
-                <div className="page-header">
-                    <h1>Platform Overview</h1>
-                    <p>Selected-mission weather overlay, manual reroute control, and route-specific AI guidance.</p>
-                </div>
-
-                <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', marginBottom: 20 }}>
-                    <div className="card stat-card">
-                        <div className="stat-label">Open Missions</div>
-                        <div className="stat-value">{metrics.activeFlights}</div>
-                        <div className="stat-sub stat-sub-muted">{compactQueue.length} shown in queue</div>
-                    </div>
-                    <div className="card stat-card">
-                        <div className="stat-label">Path Weather</div>
-                        <div className="stat-value">{pathReport?.routeState || selectedDelivery?.routeState || 'CLEAR'}</div>
-                        <div className="stat-sub stat-sub-muted">{pathReport ? `${pathReport.impactedStops} impacted stop${pathReport.impactedStops === 1 ? '' : 's'}` : 'Select a mission'}</div>
-                    </div>
-                    <div className="card stat-card">
-                        <div className="stat-label">Route Response</div>
-                        <div className="stat-value">{selectedDelivery?.routeState === 'REROUTED' || selectedDelivery?.status === 'REROUTED' ? 'MANUAL' : selectedDelivery?.status === 'WEATHER_HOLD' ? 'HOLD' : 'LIVE'}</div>
-                        <div className="stat-sub stat-sub-muted">{selectedDelivery?.estimatedTime || 'No mission selected'}</div>
-                    </div>
-                    <div className="card stat-card">
-                        <div className="stat-label">Route Distance</div>
-                        <div className="stat-value">{selectedDelivery ? formatDistanceKm(pathReport?.routeDistanceKm ?? selectedDelivery?.routeDistanceKm) : '—'}</div>
-                        <div className="stat-sub stat-sub-muted">
-                            {selectedDelivery ? `Remaining ${formatDistanceKm(pathReport?.remainingDistanceKm ?? selectedDelivery?.remainingDistanceKm)}` : 'Select a mission'}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                    <div>
+                        <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Platform Overview</h1>
+                        <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-secondary)' }}>
+                            <span><strong style={{ color: 'var(--text-primary)' }}>{active.length}</strong> open missions</span>
+                            <span><strong style={{ color: metrics.severeStations > 0 ? '#dc2626' : metrics.watchStations > 0 ? '#f59e0b' : 'var(--text-primary)' }}>{metrics.watchStations}</strong> weather alerts</span>
+                            <span><strong style={{ color: 'var(--text-primary)' }}>{metrics.onlineStations}</strong>/{metrics.totalStations} nodes online</span>
+                            {opsLoading && <span style={{ color: 'var(--text-tertiary)' }}>Refreshing…</span>}
                         </div>
                     </div>
+                    <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '6px 12px', fontSize: 11 }}
+                        onClick={() => setShowWeatherOverlay((v) => !v)}
+                    >
+                        {showWeatherOverlay ? 'Hide radar' : 'Show radar'}
+                    </button>
                 </div>
 
                 {notifications.length > 0 && (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 16 }}>
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
                         {notifications.slice(0, 3).map((notification) => (
                             <div
                                 key={notification.id}
-                                className="card"
                                 style={{
-                                    padding: 18,
+                                    flex: '1 1 220px',
+                                    padding: '10px 14px',
+                                    borderRadius: 8,
                                     border: notification.level === 'danger'
-                                        ? '1px solid rgba(239,68,68,0.2)'
-                                        : notification.level === 'warning'
-                                            ? '1px solid rgba(245,158,11,0.24)'
-                                            : '1px solid var(--border)',
+                                        ? '1px solid rgba(239,68,68,0.25)'
+                                        : '1px solid rgba(245,158,11,0.25)',
                                     background: notification.level === 'danger'
-                                        ? 'rgba(254,242,242,0.92)'
-                                        : notification.level === 'warning'
-                                            ? 'rgba(255,247,237,0.94)'
-                                            : 'var(--surface)',
+                                        ? 'rgba(254,242,242,0.9)'
+                                        : 'rgba(255,247,237,0.9)',
+                                    fontSize: 12,
+                                    lineHeight: 1.5,
                                 }}
                             >
-                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>
-                                    {notification.actionLabel}
-                                </div>
-                                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>{notification.title}</div>
-                                <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>{notification.detail}</div>
+                                <strong style={{ display: 'block', marginBottom: 2 }}>{notification.title}</strong>
+                                <span style={{ color: 'var(--text-secondary)' }}>{notification.detail}</span>
                             </div>
                         ))}
                     </div>
                 )}
 
-                <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
-                    <div className="card-header">
-                        <span className="card-header-title"><Signal size={14} /> Selected Route Weather + Routing</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                                {showWeatherOverlay
-                                    ? (OVERLAY_MODE_CONFIG[weatherOverlayMode] || OVERLAY_MODE_CONFIG.satellite).headerLabel
-                                    : 'Base corridor map'}
-                            </span>
-                            {showWeatherOverlay && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 16, alignItems: 'start' }}>
+                    {/* Map */}
+                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                        {showWeatherOverlay && (
+                            <div className="card-header">
+                                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                    {(OVERLAY_MODE_CONFIG[weatherOverlayMode] || OVERLAY_MODE_CONFIG.satellite).headerLabel}
+                                </span>
                                 <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 999, overflow: 'hidden', background: 'var(--bg)' }}>
                                     {Object.entries(OVERLAY_MODE_CONFIG).map(([mode, config]) => (
                                         <button
@@ -1573,296 +1561,211 @@ export default function AdminDashboard() {
                                             type="button"
                                             onClick={() => setWeatherOverlayMode(mode)}
                                             style={{
-                                                padding: '6px 10px',
-                                                fontSize: 11,
-                                                fontWeight: 600,
+                                                padding: '5px 10px', fontSize: 11, fontWeight: 600, border: 'none',
                                                 color: weatherOverlayMode === mode ? 'white' : 'var(--text-secondary)',
                                                 background: weatherOverlayMode === mode ? 'var(--text)' : 'transparent',
-                                                border: 'none',
                                             }}
                                         >
                                             {config.buttonLabel}
                                         </button>
                                     ))}
                                 </div>
-                            )}
-                            <button
-                                type="button"
-                                className="btn btn-secondary"
-                                style={{ padding: '6px 10px', fontSize: 11 }}
-                                onClick={() => setShowWeatherOverlay((current) => !current)}
-                            >
-                                {showWeatherOverlay ? 'Hide weather overlay' : 'Show weather overlay'}
-                            </button>
-                        </div>
+                            </div>
+                        )}
+                        <OverviewWeatherMap
+                            height={580}
+                            stations={orderedStations}
+                            drones={drones}
+                            deliveries={deliveries}
+                            lines={lines}
+                            weatherStations={weatherStations}
+                            highlightedDelivery={selectedDelivery}
+                            showWeatherOverlay={showWeatherOverlay}
+                            weatherOverlayMode={weatherOverlayMode}
+                        />
                     </div>
-                    <OverviewWeatherMap
-                        height={520}
-                        stations={orderedStations}
-                        drones={drones}
-                        deliveries={deliveries}
-                        lines={lines}
-                        weatherStations={weatherStations}
-                        highlightedDelivery={selectedDelivery}
-                        showWeatherOverlay={showWeatherOverlay}
-                        weatherOverlayMode={weatherOverlayMode}
-                    />
-                </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16, alignItems: 'start' }}>
-                    <div style={{ display: 'grid', gap: 16 }}>
-                        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                            <div
-                                className="card-header"
-                                style={{
-                                    display: 'grid',
-                                    gap: 4,
-                                    alignItems: 'start',
-                                }}
-                            >
-                                <span className="card-header-title"><BrainCircuit size={14} /> Path Weather Report</span>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--text-secondary)' }}>
-                                    <span style={{ minWidth: 0 }}>
-                                        {weatherSourceLabel}{weatherUpdatedAt ? ` · ${weatherUpdatedAt}` : ''}
-                                    </span>
-                                    {opsLoading && <span>Refreshing…</span>}
-                                </div>
-                            </div>
-                            <div style={{ padding: 18, display: 'grid', gap: 14 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-                                    <div>
-                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Selected mission</div>
-                                        <div style={{ fontWeight: 700 }}>{selectedDelivery?.id || 'No mission selected'}</div>
-                                    </div>
-                                    {selectedDelivery && <span className={`badge ${selectedStatus.badge}`}>{selectedStatus.label}</span>}
-                                </div>
+                    {/* Right sidebar */}
+                    <div style={{ display: 'grid', gap: 12 }}>
 
-                                <div
-                                    style={{
-                                        padding: '14px 16px',
-                                        borderRadius: 10,
-                                        border: `1px solid ${pathTone.border}`,
-                                        background: pathTone.background,
-                                        color: pathTone.color,
-                                    }}
-                                >
-                                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Path headline</div>
-                                    <div style={{ fontSize: 13, lineHeight: 1.7 }}>
-                                        {pathReport?.headline || (pathInsightLoading ? 'Loading route weather report…' : 'Select a mission to inspect path weather.')}
-                                    </div>
-                                </div>
-
-                                {pathReport ? (
-                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-                                        <div style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Operational effect</div>
-                                            <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>{pathReport.operationalEffect}</div>
-                                        </div>
-                                        <div style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Distance profile</div>
-                                            <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>
-                                                Total route distance: {formatDistanceKm(pathReport.routeDistanceKm)}.
-                                                {' '}
-                                                Remaining from current mission state: {formatDistanceKm(pathReport.remainingDistanceKm)}.
-                                            </div>
-                                        </div>
-                                        <div style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>ETA model</div>
-                                            <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>
-                                                Estimated arrival: {pathReport.etaDisplay || 'Unavailable'}.
-                                                {' '}
-                                                Cruise speed: {pathReport.cruiseSpeedKph ? `${pathReport.cruiseSpeedKph} km/h` : 'Unavailable'} via {pathReport.speedSource || 'route default'}.
-                                            </div>
-                                            <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.6, color: 'var(--text-tertiary)' }}>
-                                                Base flight {Number.isFinite(pathReport.baseFlightMinutes) ? formatMinutes(pathReport.baseFlightMinutes) : 'unavailable'}
-                                                {' · '}
-                                                Weather {pathReport.weatherDelayMinutes > 0 ? `+${formatMinutes(pathReport.weatherDelayMinutes)}` : 'clear'}
-                                                {' · '}
-                                                Handoffs {pathReport.handoffDelayMinutes > 0 ? `+${formatMinutes(pathReport.handoffDelayMinutes)}` : 'none'}
-                                            </div>
-                                        </div>
-                                        <div style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Weather summary</div>
-                                            <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>{pathReport.summary}</div>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div style={{ padding: '16px 18px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text-secondary)', fontSize: 13 }}>
-                                        Select a mission to inspect route distance, weather impact, and manual reroute recommendations.
-                                    </div>
-                                )}
-
-                                <div style={{ padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Signals on this path</div>
-                                    <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>
-                                        {pathReport?.weatherSignals?.length > 0 ? pathReport.weatherSignals.join(' • ') : 'No significant weather signals on the selected route.'}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
+                        {/* Mission Queue */}
                         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                             <div className="card-header">
-                                <span className="card-header-title"><Activity size={14} /> Mission Queue</span>
+                                <span className="card-header-title"><Activity size={14} /> Missions</span>
                                 <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{active.length} open</span>
                             </div>
-                            <div style={{ padding: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+                            <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                                {active.length === 0 && (
+                                    <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>No open missions.</div>
+                                )}
                                 {active.map((delivery) => {
                                     const status = getStatusPresentation(delivery);
+                                    const isSelected = selectedDelivery?.id === delivery.id;
                                     return (
                                         <button
                                             key={delivery.id}
                                             type="button"
                                             onClick={() => setSelectedDeliveryId(delivery.id)}
                                             style={{
-                                                width: '100%',
-                                                textAlign: 'left',
-                                                padding: '14px 16px',
-                                                borderRadius: 10,
-                                                border: selectedDelivery?.id === delivery.id ? '1px solid rgba(37,99,235,0.28)' : '1px solid var(--border)',
-                                                background: selectedDelivery?.id === delivery.id ? 'var(--accent-light)' : 'var(--bg)',
+                                                width: '100%', textAlign: 'left',
+                                                padding: '12px 16px',
+                                                borderBottom: '1px solid var(--border)',
+                                                background: isSelected ? 'var(--accent-light)' : 'transparent',
+                                                borderLeft: isSelected ? '3px solid #2563eb' : '3px solid transparent',
                                             }}
                                         >
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                                                 <div style={{ minWidth: 0 }}>
-                                                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{delivery.payload}</div>
-                                                    <div className="mono" style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{delivery.id}</div>
+                                                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{delivery.payload}</div>
+                                                    <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{delivery.origin} → {delivery.destination}</div>
                                                 </div>
                                                 <span className={`badge ${status.badge}`} style={{ fontSize: 10, flexShrink: 0 }}>{status.label}</span>
-                                            </div>
-                                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                                                {delivery.origin} → {delivery.destination}
-                                            </div>
-                                            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
-                                                {selectedDelivery?.id === delivery.id ? 'Currently selected' : 'Tap to inspect route weather'}
                                             </div>
                                         </button>
                                     );
                                 })}
-                                {active.length === 0 && (
-                                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-tertiary)', fontSize: 13 }}>No open missions.</div>
-                                )}
                             </div>
                         </div>
-                    </div>
 
-                    <div style={{ display: 'grid', gap: 16 }}>
-                        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                            <div className="card-header">
-                                <span className="card-header-title"><Activity size={14} /> Mission Control</span>
-                            </div>
-                            <div style={{ padding: 18, display: 'grid', gap: 14 }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-                                    <div style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Mission</div>
-                                        <div style={{ fontWeight: 700 }}>{selectedDelivery?.id || 'No mission selected'}</div>
-                                        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>{selectedDelivery?.origin} {selectedDelivery ? '→' : ''} {selectedDelivery?.destination}</div>
-                                    </div>
-                                    <div style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Status</div>
-                                        <div style={{ fontWeight: 700 }}>{selectedStatus.label}</div>
-                                        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>{selectedDelivery?.estimatedTime || 'Select a mission'}</div>
-                                    </div>
+                        {/* Selected mission detail */}
+                        {selectedDelivery ? (
+                            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span className="card-header-title"><Signal size={14} /> {selectedDelivery.id}</span>
+                                    <span className={`badge ${selectedStatus.badge}`}>{selectedStatus.label}</span>
                                 </div>
-
-                                <div style={{ padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>Demo controls</div>
-                                    <div style={{ display: 'grid', gap: 8 }}>
-                                        <button type="button" className="btn btn-secondary" onClick={() => handleCreateDemoMission('bad-path')}>
-                                            Add bad-path mission
-                                        </button>
-                                        <button type="button" className="btn btn-secondary" onClick={() => handleCreateDemoMission('random')}>
-                                            Add random mission
-                                        </button>
-                                        <button type="button" className="btn btn-secondary" onClick={handleDeleteSelectedMission} disabled={!selectedDelivery}>
-                                            Delete selected mission
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {selectedDelivery && ['WEATHER_HOLD', 'REROUTED', 'IN_TRANSIT', 'HANDOFF', 'READY_TO_LAUNCH'].includes(selectedDelivery.status) && pathReport && (
-                                    <>
-                                        <div
-                                            style={{
-                                                padding: '12px 14px',
-                                                borderRadius: 10,
-                                                border: pathReport.manualRerouteSuggested
-                                                    ? '1px solid rgba(245,158,11,0.28)'
-                                                    : '1px solid rgba(148,163,184,0.2)',
-                                                background: pathReport.manualRerouteSuggested
-                                                    ? 'rgba(245,158,11,0.08)'
-                                                    : 'rgba(148,163,184,0.08)',
-                                            }}
-                                        >
-                                            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>
-                                                Manual reroute check
-                                            </div>
-                                            <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-                                                {pathReport.manualRerouteHint}
-                                            </div>
+                                <div style={{ padding: 16, display: 'grid', gap: 12 }}>
+                                    {/* Route + distance row */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                                        <div style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 3 }}>Route</div>
+                                            <div style={{ fontSize: 12, fontWeight: 600 }}>{selectedDelivery.origin}</div>
+                                            <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>→ {selectedDelivery.destination}</div>
                                         </div>
-
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary"
-                                            style={{ justifyContent: 'center' }}
-                                            onClick={() => handleManualReroute(selectedDelivery.id)}
-                                            disabled={reroutingDeliveryId === selectedDelivery.id}
-                                        >
-                                            {reroutingDeliveryId === selectedDelivery.id ? (
-                                                <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Recomputing route…</>
-                                            ) : (
-                                                <><RefreshCcw size={14} /> Manual reroute from current weather</>
+                                        <div style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 3 }}>Distance</div>
+                                            <div style={{ fontSize: 12, fontWeight: 600 }}>{formatDistanceKm(pathReport?.routeDistanceKm ?? selectedDelivery.routeDistanceKm)}</div>
+                                            {pathReport?.remainingDistanceKm != null && (
+                                                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{formatDistanceKm(pathReport.remainingDistanceKm)} remaining</div>
                                             )}
-                                        </button>
-                                    </>
-                                )}
+                                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>{pathReport?.etaDisplay || selectedDelivery.estimatedTime || '—'}</div>
+                                            {pathReport && Number.isFinite(pathReport.baseFlightMinutes) && (
+                                                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 3, lineHeight: 1.5 }}>
+                                                    {formatMinutes(pathReport.baseFlightMinutes)} base
+                                                    {pathReport.weatherDelayMinutes > 0 && ` · +${formatMinutes(pathReport.weatherDelayMinutes)} weather`}
+                                                    {pathReport.handoffDelayMinutes > 0 && ` · +${formatMinutes(pathReport.handoffDelayMinutes)} handoffs`}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
 
-                                {rerouteDecision && rerouteDecision.deliveryId === selectedDelivery?.id && (
-                                    <div
-                                        style={{
-                                            padding: '12px 14px',
-                                            borderRadius: 10,
-                                            border: rerouteDecision.tone === 'success'
-                                                ? '1px solid rgba(16,185,129,0.24)'
-                                                : '1px solid rgba(245,158,11,0.28)',
-                                            background: rerouteDecision.tone === 'success'
-                                                ? 'rgba(16,185,129,0.08)'
-                                                : 'rgba(245,158,11,0.1)',
-                                        }}
-                                    >
-                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>
-                                            {rerouteDecision.title}
+                                    {/* Weather headline */}
+                                    <div style={{
+                                        padding: '12px 14px', borderRadius: 8,
+                                        border: `1px solid ${pathTone.border}`,
+                                        background: pathTone.background, color: pathTone.color,
+                                    }}>
+                                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                                            Path Weather · {pathReport?.routeState || selectedDelivery.routeState || 'CLEAR'}
                                         </div>
-                                        <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-                                            {rerouteDecision.detail}
+                                        <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                                            {pathInsightLoading && !pathReport
+                                                ? 'Loading…'
+                                                : pathReport?.headline || 'Route weather looks clear.'}
                                         </div>
+                                        {pathReport?.summary && pathReport.summary !== pathReport.headline && (
+                                            <div style={{ marginTop: 5, fontSize: 11, lineHeight: 1.5, opacity: 0.85 }}>{pathReport.summary}</div>
+                                        )}
+                                        {pathReport?.weatherSignals?.length > 0 && (
+                                            <div style={{ marginTop: 6, fontSize: 11, opacity: 0.8 }}>
+                                                {pathReport.weatherSignals.join(' • ')}
+                                            </div>
+                                        )}
+                                        {(weatherSourceLabel || weatherUpdatedAt) && (
+                                            <div style={{ marginTop: 8, paddingTop: 7, borderTop: `1px solid ${pathTone.border}`, fontSize: 10, opacity: 0.7, lineHeight: 1.4 }}>
+                                                {weatherSourceLabel}{weatherUpdatedAt ? ` · Updated ${weatherUpdatedAt}` : ''}
+                                            </div>
+                                        )}
                                     </div>
-                                )}
-                            </div>
-                        </div>
 
-                        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                            <div className="card-header">
-                                <span className="card-header-title"><BrainCircuit size={14} /> Operator Guidance</span>
-                            </div>
-                            <div style={{ padding: 18, display: 'grid', gap: 16 }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
-                                    <div style={{ padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Gemini</div>
-                                        <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>
-                                            {pathInsightLoading && !selectedPathInsight ? 'Generating path-specific Gemini guidance…' : selectedPathInsight?.gemini?.content || 'Gemini insight unavailable.'}
+                                    {/* Reroute */}
+                                    {canReroute && (
+                                        <div style={{ display: 'grid', gap: 8 }}>
+                                            {pathReport.manualRerouteHint && (
+                                                <div style={{
+                                                    fontSize: 11, lineHeight: 1.5, padding: '8px 10px', borderRadius: 6,
+                                                    background: pathReport.manualRerouteSuggested ? 'rgba(245,158,11,0.08)' : 'rgba(148,163,184,0.08)',
+                                                    border: pathReport.manualRerouteSuggested ? '1px solid rgba(245,158,11,0.25)' : '1px solid rgba(148,163,184,0.18)',
+                                                    color: 'var(--text-secondary)',
+                                                }}>
+                                                    {pathReport.manualRerouteHint}
+                                                </div>
+                                            )}
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                style={{ justifyContent: 'center', fontWeight: 600 }}
+                                                onClick={() => handleManualReroute(selectedDelivery.id)}
+                                                disabled={reroutingDeliveryId === selectedDelivery.id}
+                                            >
+                                                {reroutingDeliveryId === selectedDelivery.id
+                                                    ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Recomputing…</>
+                                                    : <><RefreshCcw size={14} /> Manual reroute</>}
+                                            </button>
                                         </div>
-                                    </div>
-                                    <div style={{ padding: '14px 16px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
-                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Snowflake</div>
-                                        <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>
-                                            {pathInsightLoading && !selectedPathInsight ? 'Generating path-specific Snowflake guidance…' : selectedPathInsight?.snowflake?.content || 'Snowflake insight unavailable.'}
+                                    )}
+
+                                    {rerouteDecision && rerouteDecision.deliveryId === selectedDelivery.id && (
+                                        <div style={{
+                                            padding: '10px 12px', borderRadius: 8,
+                                            border: rerouteDecision.tone === 'success' ? '1px solid rgba(16,185,129,0.28)' : '1px solid rgba(245,158,11,0.28)',
+                                            background: rerouteDecision.tone === 'success' ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.1)',
+                                            fontSize: 12, lineHeight: 1.6,
+                                        }}>
+                                            <strong style={{ display: 'block', marginBottom: 2 }}>{rerouteDecision.title}</strong>
+                                            <span style={{ color: 'var(--text-secondary)' }}>{rerouteDecision.detail}</span>
                                         </div>
-                                    </div>
+                                    )}
+
+                                    {/* AI guidance */}
+                                    {(selectedPathInsight?.gemini?.content || selectedPathInsight?.snowflake?.content || pathInsightLoading) && (
+                                        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'grid', gap: 10 }}>
+                                            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>AI Guidance</div>
+                                            {(selectedPathInsight?.gemini?.content || pathInsightLoading) && (
+                                                <div>
+                                                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', marginBottom: 3 }}>Gemini</div>
+                                                    <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                                                        {pathInsightLoading && !selectedPathInsight ? 'Generating…' : selectedPathInsight?.gemini?.content}
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {(selectedPathInsight?.snowflake?.content || pathInsightLoading) && (
+                                                <div>
+                                                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', marginBottom: 3 }}>Snowflake</div>
+                                                    <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                                                        {pathInsightLoading && !selectedPathInsight ? 'Generating…' : selectedPathInsight?.snowflake?.content}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-                        </div>
+                        ) : (
+                            <div className="card" style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
+                                Select a mission above to inspect its route weather and take action.
+                            </div>
+                        )}
+
+                        {/* Demo controls */}
+                        <details style={{ fontSize: 12 }}>
+                            <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)', padding: '6px 2px', userSelect: 'none' }}>Demo controls</summary>
+                            <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                                <button type="button" className="btn btn-secondary" onClick={() => handleCreateDemoMission('bad-path')}>Add bad-path mission</button>
+                                <button type="button" className="btn btn-secondary" onClick={() => handleCreateDemoMission('random')}>Add random mission</button>
+                                <button type="button" className="btn btn-secondary" onClick={handleDeleteSelectedMission} disabled={!selectedDelivery}>Delete selected mission</button>
+                            </div>
+                        </details>
                     </div>
                 </div>
             </div>
@@ -2126,42 +2029,30 @@ export default function AdminDashboard() {
 
                         <div className="card" style={{ padding: 18 }}>
                             <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 10 }}>Fleet ({displayDrones.length})</div>
-                            <div style={{ display: 'grid', gap: 8, maxHeight: 440, overflowY: 'auto' }}>
-                                {displayDrones.map(d => (
-                                    <button
-                                        key={d.id}
-                                        onClick={() => setSelectedDroneId(d.id)}
-                                        className="card"
-                                        style={{
-                                            padding: '14px 16px',
-                                            cursor: 'pointer',
-                                            border: selectedDrone?.id === d.id ? '2px solid var(--accent)' : '1px solid var(--border)',
-                                            background: selectedDrone?.id === d.id ? 'var(--accent-light)' : 'var(--surface)',
-                                            textAlign: 'left',
-                                            transition: 'all 0.15s ease',
-                                            boxShadow: 'none',
-                                        }}
-                                    >
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
-                                            <span className="mono" style={{ fontSize: 13, fontWeight: 700 }}>{d.id}</span>
-                                            <span className={`badge ${d.status === 'on_route' ? 'badge-green' : d.status === 'relocating' ? 'badge-blue' : d.status === 'charging' ? 'badge-yellow' : 'badge-neutral'}`} style={{ fontSize: 10 }}>
-                                                {d.status.replace(/_/g, ' ')}
-                                            </span>
-                                        </div>
-                                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{d.location}</div>
-                                        {d.status === 'relocating' && d.target_location && (
-                                            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6 }}>
-                                                Route to {d.target_location} · {formatDistanceKm(d.relocationDistanceKm)}
-                                            </div>
-                                        )}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
-                                            <div style={{ flex: 1, height: 4, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
-                                                <div style={{ height: '100%', width: `${d.battery}%`, background: d.battery > 30 ? 'var(--accent)' : 'var(--warning)', borderRadius: 2 }} />
-                                            </div>
-                                            <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-secondary)' }}>{d.battery}%</span>
-                                        </div>
-                                    </button>
-                                ))}
+                            <div style={{ display: 'grid', gap: 2, maxHeight: 440, overflowY: 'auto' }}>
+                                {displayDrones.map(d => {
+                                    const statusColor = d.status === 'ready' ? '#22c55e' : d.status === 'on_route' ? '#f59e0b' : d.status === 'relocating' ? '#3b82f6' : '#ef4444';
+                                    const isSelected = selectedDrone?.id === d.id;
+                                    return (
+                                        <button
+                                            key={d.id}
+                                            onClick={() => setSelectedDroneId(d.id)}
+                                            style={{
+                                                display: 'flex', alignItems: 'center', gap: 10,
+                                                padding: '7px 10px',
+                                                borderRadius: 6,
+                                                cursor: 'pointer',
+                                                border: isSelected ? '1px solid rgba(37,99,235,0.3)' : '1px solid transparent',
+                                                background: isSelected ? 'var(--accent-light)' : 'transparent',
+                                                textAlign: 'left',
+                                            }}
+                                        >
+                                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor, flexShrink: 0 }} />
+                                            <span style={{ fontSize: 12, fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
+                                            <span className="mono" style={{ fontSize: 11, color: d.battery <= 30 ? 'var(--warning)' : 'var(--text-tertiary)', flexShrink: 0 }}>{d.battery}%</span>
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </div>
                     </div>
@@ -2170,11 +2061,11 @@ export default function AdminDashboard() {
                 {/* Drone Camera Feed */}
                 <div style={{ marginBottom: 24 }}>
                     <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                        {selectedDrone ? `${selectedDrone.id} Camera Feed` : 'Camera Feeds'}
+                        {selectedDrone ? `${selectedDrone.name} Camera Feed` : 'Camera Feeds'}
                     </h2>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-                        <DroneFeed src="/feeds/cam1.png" label={selectedDrone ? `${selectedDrone.id} Forward` : 'Forward'} id="CAM-01" />
-                        <DroneFeed src="/feeds/cam2.png" label={selectedDrone ? `${selectedDrone.id} Downward` : 'Downward'} id="CAM-02" />
+                        <DroneFeed src="/feeds/cam1.png" label={selectedDrone ? `${selectedDrone.name} Forward` : 'Forward'} id="CAM-01" />
+                        <DroneFeed src="/feeds/cam2.png" label={selectedDrone ? `${selectedDrone.name} Downward` : 'Downward'} id="CAM-02" />
                         <DroneFeed src="/feeds/cam3.png" label={selectedDrone ? `${selectedDrone.location} Pad` : 'Station Pad'} id="CAM-03" />
                     </div>
                 </div>
