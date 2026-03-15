@@ -402,146 +402,9 @@ function formatWeatherUpdate(value) {
     }
 }
 
-function isCloudSignal(snapshot) {
-    const weatherLabel = String(snapshot?.weatherCodeLabel || '').toLowerCase();
-    return /cloud|overcast|fog|snow|rain|drizzle/.test(weatherLabel)
-        || Number(snapshot?.precipitationProbabilityPct || 0) >= 35
-        || Number(snapshot?.snowfallCm || 0) > 0
-        || Number(snapshot?.precipitationMm || 0) > 0;
-}
-
-function buildSyntheticCloudCells(route = [], stationsById = {}, weatherByStation = {}) {
-    const cells = [];
-
-    route.forEach((stationId, index) => {
-        if (index === 0) return;
-
-        const station = stationsById[stationId];
-        const snapshot = weatherByStation[stationId];
-        if (!station || !snapshot) return;
-
-        const severity = snapshot.condition === 'SEVERE'
-            ? 3
-            : snapshot.condition === 'UNSTABLE'
-                ? 2
-                : snapshot.condition === 'WATCH' || isCloudSignal(snapshot)
-                    ? 1
-                    : 0;
-
-        if (severity === 0) return;
-
-        const previousStation = stationsById[route[index - 1]];
-        const radiusMeters = severity === 3 ? 220000 : severity === 2 ? 170000 : 130000;
-        const opacity = severity === 3 ? 0.38 : severity === 2 ? 0.3 : 0.24;
-
-        cells.push({
-            lat: station.lat,
-            lng: station.lng,
-            radiusMeters,
-            opacity,
-            severity,
-            anchorCoords: previousStation
-                ? [[previousStation.lat, previousStation.lng], [station.lat, station.lng]]
-                : [[station.lat, station.lng]],
-            label: `${station.id} cloud field`,
-            detail: snapshot.summary,
-        });
-
-        if (previousStation) {
-            cells.push({
-                lat: (previousStation.lat + station.lat) / 2,
-                lng: (previousStation.lng + station.lng) / 2,
-                radiusMeters: Math.round(radiusMeters * 0.92),
-                opacity: opacity * 0.95,
-                severity,
-                anchorCoords: [[previousStation.lat, previousStation.lng], [station.lat, station.lng]],
-                label: `${previousStation.id} to ${station.id} cloud band`,
-                detail: snapshot.summary,
-            });
-        }
-    });
-
-    return cells.slice(0, 14);
-}
-
-function buildEllipsePolygon(lat, lng, latRadius, lngRadius, rotationDeg = 0, pointCount = 28) {
-    const rotation = (rotationDeg * Math.PI) / 180;
-    const points = [];
-
-    for (let index = 0; index <= pointCount; index += 1) {
-        const theta = (index / pointCount) * Math.PI * 2;
-        const ellipseX = Math.cos(theta) * lngRadius;
-        const ellipseY = Math.sin(theta) * latRadius;
-        const rotatedLng = lng + (ellipseX * Math.cos(rotation)) - (ellipseY * Math.sin(rotation));
-        const rotatedLat = lat + (ellipseX * Math.sin(rotation)) + (ellipseY * Math.cos(rotation));
-        points.push([rotatedLat, rotatedLng]);
-    }
-
-    return points;
-}
-
-function addSyntheticCloudCluster(L, overlayGroup, cell) {
-    const baseLatRadius = cell.severity === 3 ? 1.05 : cell.severity === 2 ? 0.82 : 0.62;
-    const baseLngRadius = cell.severity === 3 ? 1.55 : cell.severity === 2 ? 1.22 : 0.94;
-    const bandWeight = cell.severity === 3 ? 78 : cell.severity === 2 ? 62 : 46;
-    const pattern = [
-        { latOffset: -0.12, lngOffset: -0.18, latScale: 0.76, lngScale: 0.84, opacityScale: 0.82, rotation: -14 },
-        { latOffset: -0.02, lngOffset: 0.02, latScale: 1, lngScale: 1.02, opacityScale: 1, rotation: 8 },
-        { latOffset: 0.08, lngOffset: 0.18, latScale: 0.74, lngScale: 0.8, opacityScale: 0.78, rotation: 18 },
-        { latOffset: 0.16, lngOffset: -0.1, latScale: 0.64, lngScale: 0.7, opacityScale: 0.68, rotation: -8 },
-    ];
-
-    if (Array.isArray(cell.anchorCoords) && cell.anchorCoords.length > 1) {
-        L.polyline(cell.anchorCoords, {
-            color: '#64748b',
-            weight: bandWeight,
-            opacity: Math.min(cell.opacity * 0.9, 0.34),
-            lineCap: 'round',
-            interactive: false,
-        }).addTo(overlayGroup);
-
-        L.polyline(cell.anchorCoords, {
-            color: '#cbd5e1',
-            weight: Math.max(26, bandWeight - 18),
-            opacity: Math.min(cell.opacity, 0.32),
-            lineCap: 'round',
-            interactive: false,
-        }).addTo(overlayGroup);
-    }
-
-    pattern.forEach((part, index) => {
-        L.polygon(
-            buildEllipsePolygon(
-                cell.lat + part.latOffset,
-                cell.lng + part.lngOffset,
-                baseLatRadius * part.latScale,
-                baseLngRadius * part.lngScale,
-                part.rotation,
-            ),
-            {
-                stroke: true,
-                color: index === 1 ? '#64748b' : '#94a3b8',
-                opacity: Math.min(cell.opacity + 0.28, 0.74),
-                weight: index === 1 ? 2 : 1.4,
-                fillColor: index === 1 ? '#cbd5e1' : '#94a3b8',
-                fillOpacity: Math.min((cell.opacity + 0.12) * part.opacityScale, 0.46),
-                interactive: false,
-            },
-        ).addTo(overlayGroup);
-    });
-
-    L.circleMarker([cell.lat, cell.lng], {
-        radius: 4,
-        stroke: false,
-        fillColor: '#475569',
-        fillOpacity: Math.min(cell.opacity + 0.18, 0.5),
-    })
-        .addTo(overlayGroup)
-        .bindTooltip(
-            `<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${cell.label}</strong><br/><span style="color:#64748b">${cell.detail}</span></div>`,
-            { direction: 'top', offset: [0, -8] },
-        );
-}
+const RADAR_WMS_URL = 'https://geo.weather.gc.ca/geomet';
+const RADAR_WMS_LAYER = 'RADAR_1KM_RRAI';
+const RADAR_WMS_STYLE = 'RADARURPPRECIPR14-LINEAR';
 
 /* ── Leaflet Map Component ── */
 function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], height = 380, focusDrone = null }) {
@@ -737,6 +600,7 @@ function OverviewWeatherMap({
     const leafletRef = useRef(null);
     const mapInstance = useRef(null);
     const overlayGroupRef = useRef(null);
+    const radarLayerRef = useRef(null);
     const legendControlRef = useRef(null);
     const resizeHandleRef = useRef(null);
 
@@ -785,6 +649,9 @@ function OverviewWeatherMap({
                 legendControlRef.current.remove();
                 legendControlRef.current = null;
             }
+            if (radarLayerRef.current && mapInstance.current?.hasLayer(radarLayerRef.current)) {
+                mapInstance.current.removeLayer(radarLayerRef.current);
+            }
             resizeObserver?.disconnect();
             if (mapInstance.current) {
                 mapInstance.current.remove();
@@ -792,6 +659,7 @@ function OverviewWeatherMap({
             }
             overlayGroupRef.current = null;
             leafletRef.current = null;
+            radarLayerRef.current = null;
         };
     }, []);
 
@@ -808,14 +676,35 @@ function OverviewWeatherMap({
             legendControlRef.current = null;
         }
 
+        const radarPane = map.getPane('radarPane') || map.createPane('radarPane');
+        radarPane.style.zIndex = 340;
+
+        if (showWeatherOverlay) {
+            if (!radarLayerRef.current) {
+                radarLayerRef.current = L.tileLayer.wms(RADAR_WMS_URL, {
+                    pane: 'radarPane',
+                    layers: RADAR_WMS_LAYER,
+                    styles: RADAR_WMS_STYLE,
+                    format: 'image/png',
+                    transparent: true,
+                    version: '1.3.0',
+                    opacity: 0.58,
+                    crossOrigin: true,
+                });
+            }
+
+            if (!map.hasLayer(radarLayerRef.current)) {
+                radarLayerRef.current.addTo(map);
+            }
+        } else if (radarLayerRef.current && map.hasLayer(radarLayerRef.current)) {
+            map.removeLayer(radarLayerRef.current);
+        }
+
         const stationsById = Object.fromEntries(stations.map((station) => [station.id, station]));
         const weatherByStation = Object.fromEntries(weatherStations.map((station) => [station.stationId, station]));
         const activeDelivery = highlightedDelivery || deliveries.find((delivery) => !['DELIVERED', 'REJECTED'].includes(delivery.status));
         const routeCoords = buildRouteCoordinates(activeDelivery, stations);
         const routeStationIds = new Set(activeDelivery?.route || []);
-        const cloudCells = showWeatherOverlay
-            ? buildSyntheticCloudCells(activeDelivery?.route || [], stationsById, weatherByStation)
-            : [];
         const activeDronePosition = getActiveDronePosition(
             drones.find((drone) => drone.status === 'on_route') || drones[0],
             stations,
@@ -841,12 +730,6 @@ function OverviewWeatherMap({
                 if (coords.length > 1) {
                     L.polyline(coords, { color: line.color, weight: 3, opacity: 0.75 }).addTo(overlayGroup);
                 }
-            });
-        }
-
-        if (showWeatherOverlay) {
-            cloudCells.forEach((cell) => {
-                addSyntheticCloudCluster(L, overlayGroup, cell);
             });
         }
 
@@ -928,8 +811,8 @@ function OverviewWeatherMap({
             } else {
                 div.style.cssText = 'background:rgba(255,255,255,0.92);border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-family:Inter,sans-serif;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,0.08);min-width:180px;';
                 div.innerHTML =
-                    '<div style="font-weight:700;margin-bottom:6px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Cloud Overlay</div>' +
-                    '<div style="color:#0f172a;line-height:1.5;">Synthetic Quebec cloud field generated from live corridor weather signals.</div>' +
+                    '<div style="font-weight:700;margin-bottom:6px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Radar Overlay</div>' +
+                    '<div style="color:#0f172a;line-height:1.5;">MSC GeoMet radar composite over the selected mission corridor.</div>' +
                     `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;"><div style="width:22px;height:3px;background:${activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? '#10b981' : '#f59e0b'};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">${activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? 'Manual reroute active' : 'Current mission path'}</span></div>`;
             }
 
@@ -1379,9 +1262,10 @@ export default function AdminDashboard() {
 
         try {
             const deletedId = selectedDelivery.id;
+            setSelectedDeliveryId(null);
+            await fetchPathInsight(null).catch(() => {});
             await deleteDelivery(deletedId);
             await fetchOpsOverview();
-            setSelectedDeliveryId(null);
             setRerouteDecision({
                 deliveryId: deletedId,
                 tone: 'success',
@@ -1467,7 +1351,7 @@ export default function AdminDashboard() {
                         <span className="card-header-title"><Signal size={14} /> Selected Route Weather + Routing</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                                {showWeatherOverlay ? 'Synthetic Quebec cloud overlay' : 'Base corridor map'}
+                                {showWeatherOverlay ? 'Live MSC GeoMet radar' : 'Base corridor map'}
                             </span>
                             <button
                                 type="button"
