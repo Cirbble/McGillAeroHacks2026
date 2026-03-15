@@ -67,6 +67,68 @@ export function formatEstimatedTime(totalMinutes) {
     return `${hours}h ${remainder}m`;
 }
 
+function hasCoordinates(station) {
+    return Number.isFinite(Number(station?.lat)) && Number.isFinite(Number(station?.lng));
+}
+
+function haversineKm(from, to) {
+    const earthRadiusKm = 6371;
+    const fromLat = Number(from.lat) * Math.PI / 180;
+    const toLat = Number(to.lat) * Math.PI / 180;
+    const deltaLat = (Number(to.lat) - Number(from.lat)) * Math.PI / 180;
+    const deltaLng = (Number(to.lng) - Number(from.lng)) * Math.PI / 180;
+    const a = Math.sin(deltaLat / 2) ** 2
+        + Math.cos(fromLat) * Math.cos(toLat) * Math.sin(deltaLng / 2) ** 2;
+    return earthRadiusKm * 2 * Math.asin(Math.sqrt(a));
+}
+
+function calculateRouteDistanceKm(route = [], stationsById = {}) {
+    if (route.length <= 1) return 0;
+
+    let distanceKm = 0;
+    let measuredSegments = 0;
+
+    for (let index = 0; index < route.length - 1; index += 1) {
+        const from = stationsById[route[index]];
+        const to = stationsById[route[index + 1]];
+
+        if (!hasCoordinates(from) || !hasCoordinates(to)) continue;
+
+        measuredSegments += 1;
+        distanceKm += haversineKm(from, to);
+    }
+
+    if (measuredSegments === 0) return null;
+    return Number(distanceKm.toFixed(1));
+}
+
+function getRemainingRoute(route = [], lastStation = null, currentLeg = 0) {
+    if (route.length === 0) return [];
+    if (Number(currentLeg || 0) <= 0 || !lastStation) return route;
+
+    const lastStationIndex = route.indexOf(lastStation);
+    if (lastStationIndex === -1) return route;
+    return route.slice(lastStationIndex);
+}
+
+function summarizeRouteDistance({
+    route = [],
+    stationsById = {},
+    lastStation = null,
+    currentLeg = 0,
+}) {
+    const routeDistanceKm = calculateRouteDistanceKm(route, stationsById);
+    const remainingDistanceKm = calculateRouteDistanceKm(
+        getRemainingRoute(route, lastStation, currentLeg),
+        stationsById
+    );
+
+    return {
+        routeDistanceKm,
+        remainingDistanceKm,
+    };
+}
+
 function getGraph(lines = []) {
     const graph = new Map();
 
@@ -512,6 +574,12 @@ export function planDeliveryOperation({
         status = 'REROUTED';
     }
 
+    const { routeDistanceKm, remainingDistanceKm } = summarizeRouteDistance({
+        route: fullRoute,
+        stationsById,
+        lastStation: sanitized.lastStation || missionStart,
+        currentLeg: sanitized.currentLeg,
+    });
     const estimatedMinutes = estimateRouteMinutes(fullRoute, sanitized.priority, routeAssessment.warnings, shouldUseReroute);
     const recommendedAction = status === 'REJECTED'
         ? 'Remove this request from the dispatch queue and notify the sender of the policy rejection.'
@@ -593,6 +661,8 @@ export function planDeliveryOperation({
         decisionStatus: manualDecision.decisionStatus,
         decisionSummary: manualDecision.decisionSummary,
         decisionDetail: manualDecision.decisionDetail,
+        routeDistanceKm,
+        remainingDistanceKm,
         reasoning: detailReasoning,
         estimatedMinutes,
         estimatedTime: formatEstimatedTime(estimatedMinutes),
@@ -792,6 +862,8 @@ export function buildPathWeatherReport(delivery = null, weatherByStation = {}) {
         maxGustKph: Math.round(maxGustKph),
         lowestVisibilityKm: Number.isFinite(lowestVisibilityKm) ? Number(lowestVisibilityKm.toFixed(1)) : null,
         coldestTempC: Number.isFinite(coldestTempC) ? Number(coldestTempC.toFixed(1)) : null,
+        routeDistanceKm: delivery.routeDistanceKm ?? null,
+        remainingDistanceKm: delivery.remainingDistanceKm ?? delivery.routeDistanceKm ?? null,
         routePreview: route.length > 0 ? `${route[0]} → ${route[route.length - 1]}` : `${delivery.origin} → ${delivery.destination}`,
         routeStops: route.length,
         rerouteActive,

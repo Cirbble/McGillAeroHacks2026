@@ -34,6 +34,8 @@ const DeliverySchema = new mongoose.Schema({
     reasoning: { type: String, default: '' },
     estimatedTime: { type: String, default: '2h 10m' },
     estimatedMinutes: { type: Number, default: 130 },
+    routeDistanceKm: { type: Number, default: null },
+    remainingDistanceKm: { type: Number, default: null },
     weightKg: { type: Number, default: null },
     routeState: { type: String, enum: ['CLEAR', 'WATCH', 'ADVISORY', 'BLOCKED', 'REROUTED'], default: 'CLEAR' },
     weatherState: { type: String, enum: ['CLEAR', 'WATCH', 'UNSTABLE', 'SEVERE'], default: 'CLEAR' },

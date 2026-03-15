@@ -5,6 +5,13 @@ import { dispatchWithGemini } from '../services/gemini';
 import { speakText, generateDispatchConfirmation } from '../services/elevenlabs';
 import { Send, Cpu, Link as LinkIcon, Lock, CheckCircle2, Loader2, Volume2, Route } from 'lucide-react';
 
+function formatDistanceKm(distanceKm) {
+    const numericDistance = Number(distanceKm);
+    if (!Number.isFinite(numericDistance)) return '—';
+    if (numericDistance >= 100) return `${Math.round(numericDistance).toLocaleString()} km`;
+    return `${numericDistance.toFixed(1)} km`;
+}
+
 export default function DistributorPortal() {
     const { deliveries, stations, addDelivery } = useStore();
     const location = useLocation();
@@ -203,7 +210,11 @@ export default function DistributorPortal() {
                                     </div>
                                 </div>
 
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 16 }}>
+                                    <div>
+                                        <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Distance</div>
+                                        <div className="mono" style={{ fontWeight: 600 }}>{formatDistanceKm(geminiResult.routeDistanceKm)}</div>
+                                    </div>
                                     <div>
                                         <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>ETA</div>
                                         <div className="mono" style={{ fontWeight: 600 }}>{geminiResult.estimatedMinutes ? `${Math.floor(geminiResult.estimatedMinutes / 60)}h ${geminiResult.estimatedMinutes % 60}m` : geminiResult.estimatedTime || '—'}</div>

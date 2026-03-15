@@ -96,6 +96,13 @@ function formatMinutes(minutes) {
     return m > 0 ? `${h}h ${m}min` : `${h}h`;
 }
 
+function formatDistanceKm(distanceKm) {
+    const numericDistance = Number(distanceKm);
+    if (!Number.isFinite(numericDistance)) return 'Distance unavailable';
+    if (numericDistance >= 100) return `${Math.round(numericDistance).toLocaleString()} km`;
+    return `${numericDistance.toFixed(1)} km`;
+}
+
 function buildRouteCoordinates(delivery, stations) {
     if (!delivery?.route?.length) return [];
 
@@ -1104,6 +1111,14 @@ export default function AdminDashboard() {
                                             <div>
                                                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Operational effect</div>
                                                 <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>{pathReport.operationalEffect}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Distance profile</div>
+                                                <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                                                    Total route distance: {formatDistanceKm(pathReport.routeDistanceKm)}.
+                                                    {' '}
+                                                    Remaining from current mission state: {formatDistanceKm(pathReport.remainingDistanceKm)}.
+                                                </div>
                                             </div>
                                             <div>
                                                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Weather summary</div>

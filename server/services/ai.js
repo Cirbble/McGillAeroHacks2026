@@ -426,6 +426,8 @@ MISSION:
 - Status: ${context.delivery.status}
 - Route: ${context.delivery.route.join(' → ')}
 - ETA: ${context.delivery.estimatedTime}
+- Total route distance: ${context.pathReport.routeDistanceKm ?? 'Unavailable'} km
+- Remaining route distance: ${context.pathReport.remainingDistanceKm ?? 'Unavailable'} km
 
 PATH WEATHER REPORT:
 - Headline: ${context.pathReport.headline}
