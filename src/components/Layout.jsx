@@ -63,8 +63,8 @@ export default function Layout({ user, setUser, children }) {
             {/* Sidebar */}
             <aside className="sidebar">
                 <div className="sidebar-brand">
-                    <div className="sidebar-brand-icon"><div className="sidebar-brand-icon-inner" /></div>
-                    <span className="sidebar-brand-name">Aero'ed</span>
+                    <img src="/logo.png" alt="Aero'ed" style={{ height: 34, objectFit: 'contain' }} />
+                    <span className="sidebar-brand-name" style={{ fontSize: 18 }}>Aero'ed</span>
                 </div>
 
                 <div className="sidebar-section-label">{moduleLabel}</div>

@@ -438,9 +438,17 @@ export default function ReceiverPortal({ user }) {
                                     <option value="iu">IU</option>
                                 </select>
                                 <button className="btn btn-primary" onClick={handleVoiceAlert}>{isSpeaking ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Volume2 size={14} />}</button>
-                                <button className="btn btn-primary" onClick={() => updateDeliveryStatus(nextDelivery.id, 'DELIVERED')} disabled={nextDelivery.status !== 'ARRIVED'}><CheckCircle2 size={14} /> Confirm Receipt</button>
                             </div>
                         </div>
+                        {nextDelivery.status === 'ARRIVED' && (
+                            <button
+                                className="btn btn-primary"
+                                onClick={() => updateDeliveryStatus(nextDelivery.id, 'DELIVERED')}
+                                style={{ marginTop: 16, width: '100%', padding: '14px 20px', fontSize: 15, fontWeight: 700, background: '#16a34a' }}
+                            >
+                                <CheckCircle2 size={18} /> Confirm Receipt — Mark as Delivered
+                            </button>
+                        )}
                     </div>
                 ) : (
                     <div className="card" style={{ marginBottom: 24, textAlign: 'center', padding: '40px 20px', color: 'var(--text-tertiary)' }}><Package size={28} style={{ marginBottom: 8, opacity: 0.3 }} /><div>No incoming deliveries.</div></div>

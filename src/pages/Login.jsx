@@ -79,7 +79,7 @@ export default function Login({ setUser }) {
             <div className="login-brand">
                 <div>
                     <div className="sidebar-brand" style={{ marginBottom: 48 }}>
-                        <div className="sidebar-brand-icon"><div className="sidebar-brand-icon-inner" /></div>
+                        <img src="/logo.png" alt="Aero'ed" style={{ height: 52, objectFit: 'contain' }} />
                         <span className="sidebar-brand-name">Aero'ed</span>
                     </div>
                     <h1>Logistics engine<br /><strong>for medical drone<br />corridors.</strong></h1>

@@ -35,6 +35,7 @@ function statusBadge(status) {
         HANDOFF: 'badge-blue',
         WEATHER_HOLD: 'badge-red',
         REROUTED: 'badge-blue',
+        ARRIVED: 'badge-green',
         DELIVERED: 'badge-green',
         REJECTED: 'badge-red',
         CANCELLED: 'badge-neutral',
@@ -112,6 +113,53 @@ function truncateText(value, maxLength = 56) {
 
 function formatLedgerRoute(delivery) {
     return [delivery.origin, delivery.destination].filter(Boolean).join(' -> ') || '-';
+}
+
+function formatSolanaBalance(balanceSol) {
+    if (!Number.isFinite(Number(balanceSol))) return 'Unknown';
+    return `${Number(balanceSol).toFixed(4)} SOL`;
+}
+
+function isFundingBlocked(delivery) {
+    const message = String(delivery?.solanaAttestationError || '').toLowerCase();
+    return !delivery?.solanaOnChain && (
+        message.includes('funding required')
+        || message.includes('faucet')
+        || message.includes('airdrop')
+        || message.includes('429')
+    );
+}
+
+function ledgerAttestationState(delivery) {
+    if (delivery.solanaOnChain) {
+        return {
+            label: 'Confirmed',
+            detail: 'Confirmed on Solana devnet',
+            slotLabel: delivery.solanaSlot || '-',
+        };
+    }
+
+    if (isFundingBlocked(delivery)) {
+        return {
+            label: 'Funding required',
+            detail: 'Fee payer needs devnet SOL before submission.',
+            slotLabel: 'Funding needed',
+        };
+    }
+
+    if (delivery.solanaAttestationError) {
+        return {
+            label: 'Retry needed',
+            detail: 'Last devnet submission failed. Retry after fixing funding/RPC.',
+            slotLabel: 'Retry needed',
+        };
+    }
+
+    return {
+        label: 'Queued',
+        detail: 'Waiting to submit to Solana devnet.',
+        slotLabel: 'Queued',
+    };
 }
 
 function getPreferredStationId(stations = [], selectors = []) {
@@ -196,6 +244,7 @@ export default function DistributorPortal() {
         addDelivery,
         approveDelivery,
         cancelDelivery,
+        initializeData,
     } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
@@ -218,6 +267,9 @@ export default function DistributorPortal() {
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [resultCard, setResultCard] = useState(null);
+    const [ledgerStatus, setLedgerStatus] = useState(null);
+    const [ledgerStatusError, setLedgerStatusError] = useState(null);
+    const [isRetryingLedger, setIsRetryingLedger] = useState(false);
 
     const requests = deliveries.filter((delivery) => ['REQUESTED', 'AWAITING_REVIEW'].includes(delivery.status)).sort((a, b) => (b.severityScore || 0) - (a.severityScore || 0));
     const activeDeliveries = deliveries.filter((delivery) => ACTIVE_STATUSES.includes(delivery.status)).sort((a, b) => toTimestamp(a.eta, Number.POSITIVE_INFINITY) - toTimestamp(b.eta, Number.POSITIVE_INFINITY));
@@ -240,6 +292,39 @@ export default function DistributorPortal() {
     ]);
     const myDispatchDroneIds = new Set(activeDeliveries.map((delivery) => delivery.assignedDrone).filter(Boolean));
     const mapDrones = showAllDrones ? drones : drones.filter((drone) => myDispatchDroneIds.has(drone.id) || myDispatchDroneIds.has(drone.assignment));
+
+    useEffect(() => {
+        if (hash !== '#ledger') return undefined;
+
+        let cancelled = false;
+
+        async function loadLedgerStatus() {
+            try {
+                const response = await fetch('/api/solana/status');
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data?.error || 'Failed to load Solana status.');
+                }
+
+                if (!cancelled) {
+                    setLedgerStatus(data);
+                    setLedgerStatusError(null);
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    setLedgerStatusError(err.message);
+                }
+            }
+        }
+
+        loadLedgerStatus();
+        const intervalId = window.setInterval(loadLedgerStatus, 15000);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(intervalId);
+        };
+    }, [hash, completedDeliveries.length, onChainCompletedDeliveries.length]);
 
     useEffect(() => {
         if (!originStations.length) {
@@ -274,6 +359,32 @@ export default function DistributorPortal() {
             setConfirmAction(null);
         } catch (err) {
             alert(`Error: ${err.message}`);
+        }
+    };
+
+    const retryLedgerAttestations = async (deliveryId = null) => {
+        setIsRetryingLedger(true);
+        try {
+            const response = await fetch('/api/solana/attestations/retry', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(deliveryId ? { deliveryId } : {}),
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                if (data?.solana) {
+                    setLedgerStatus(data.solana);
+                }
+                throw new Error(data?.error || 'Failed to retry Solana attestations.');
+            }
+
+            setLedgerStatus(data.solana || null);
+            setLedgerStatusError(null);
+            await initializeData(true);
+        } catch (err) {
+            setLedgerStatusError(err.message);
+        } finally {
+            setIsRetryingLedger(false);
         }
     };
 
@@ -568,10 +679,53 @@ export default function DistributorPortal() {
     if (hash === '#ledger') {
         return (
             <div>
-                <div className="page-header"><h1>Custody Ledger</h1><p>Delivered manifests with compact Solana-format custody attestations, memo program references, and live devnet explorer traces once confirmation lands.</p></div>
+                <div className="page-header"><h1>Custody Ledger</h1><p>Delivered manifests with real Solana devnet custody attestations, signer status, and explorer traces once confirmation lands.</p></div>
+                {ledgerStatusError && (
+                    <div className="info-box" style={{ marginBottom: 16, background: 'var(--danger-light)', borderColor: '#fca5a5', color: 'var(--danger)' }}>
+                        {ledgerStatusError}
+                    </div>
+                )}
+                {ledgerStatus && (
+                    <div className="card" style={{ marginBottom: 16, padding: 18 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <div>
+                                <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Devnet Signer</div>
+                                <div className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{truncateMiddle(ledgerStatus.authorityAddress, 18, 14)}</div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                                    Balance {formatSolanaBalance(ledgerStatus.balanceSol)} / {formatSolanaBalance(ledgerStatus.minimumBalanceSol)} required
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                <a
+                                    className="btn btn-secondary"
+                                    href={ledgerStatus.authorityExplorerUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    style={{ padding: '8px 12px' }}
+                                >
+                                    Signer Explorer
+                                </a>
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    style={{ padding: '8px 12px' }}
+                                    onClick={() => retryLedgerAttestations()}
+                                    disabled={isRetryingLedger}
+                                >
+                                    {isRetryingLedger ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Retrying</> : 'Retry Pending Attestations'}
+                                </button>
+                            </div>
+                        </div>
+                        {!ledgerStatus.canSubmitTransactions && (
+                            <div style={{ marginTop: 12, fontSize: 12, color: 'var(--warning)', lineHeight: 1.6 }}>
+                                Fund this signer with devnet SOL or set `SOLANA_DEVNET_SECRET_KEY` to a funded devnet wallet. Until then, rows cannot mint real transaction signatures.
+                            </div>
+                        )}
+                    </div>
+                )}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 16 }}>
                     <div className="stat-card"><div className="stat-label">ATTESTED DELIVERIES</div><div className="stat-value">{completedDeliveries.length}</div><div className="stat-sub stat-sub-muted">Each manifest gets a Solana-format custody record.</div></div>
-                    <div className="stat-card"><div className="stat-label">SOLANA NETWORK</div><div className="stat-value">{completedDeliveries[0]?.solanaNetwork || 'devnet'}</div><div className="stat-sub stat-sub-muted">{onChainCompletedDeliveries.length > 0 ? `${onChainCompletedDeliveries.length} live devnet attestations confirmed.` : 'New deliveries publish to devnet automatically.'}</div></div>
+                    <div className="stat-card"><div className="stat-label">SOLANA NETWORK</div><div className="stat-value">{completedDeliveries[0]?.solanaNetwork || 'devnet'}</div><div className="stat-sub stat-sub-muted">{onChainCompletedDeliveries.length > 0 ? `${onChainCompletedDeliveries.length} live devnet attestations confirmed.` : ledgerStatus?.canSubmitTransactions ? 'New deliveries are ready for devnet submission.' : 'Funding is blocking new devnet submissions.'}</div></div>
                     <div className="stat-card">
                         <div className="stat-label">PROGRAM</div>
                         <div className="stat-value" style={{ fontSize: 22, lineHeight: 1.1 }}>Memo Program</div>
@@ -593,49 +747,65 @@ export default function DistributorPortal() {
                 <div className="card" style={{ marginBottom: 16, padding: 18 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>Why Solana helps</div>
                     <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-                        Each completed mission is recorded in a Solana-compatible custody format with a real devnet transaction signature, slot, and derived PDA reference. That gives dispatch a public audit trail for who moved the shipment and exactly which manifest reached the clinic.
+                        Each completed mission is recorded with a real Solana devnet Memo transaction, slot, and derived PDA reference. That gives dispatch a public audit trail for who moved the shipment and exactly which manifest reached the clinic once the signer has enough devnet SOL to publish.
                     </div>
                 </div>
                 <div className="card" style={{ padding: 0, overflowX: 'auto', overflowY: 'hidden' }}>
-                    <table className="data-table" style={{ tableLayout: 'fixed', minWidth: 980 }}>
-                        <thead><tr><th style={{ width: 150 }}>Delivered</th><th style={{ width: 100 }}>ID</th><th>Payload</th><th style={{ width: 170 }}>Program</th><th style={{ width: 120 }}>Slot</th><th style={{ width: 220 }}>Attestation</th></tr></thead>
+                    <table className="data-table" style={{ tableLayout: 'fixed', minWidth: 1120 }}>
+                        <thead><tr><th style={{ width: 150 }}>Delivered</th><th style={{ width: 100 }}>ID</th><th style={{ width: 260 }}>Payload</th><th style={{ width: 220 }}>Program</th><th style={{ width: 140 }}>Slot</th><th style={{ width: 320 }}>Attestation</th></tr></thead>
                         <tbody>
-                            {completedDeliveries.map((delivery) => (
+                            {completedDeliveries.map((delivery) => {
+                                const fundingRequired = !delivery.solanaOnChain && ledgerStatus && !ledgerStatus.canSubmitTransactions;
+                                const attestation = fundingRequired
+                                    ? {
+                                        label: 'Funding required',
+                                        detail: 'Fee payer needs devnet SOL before submission.',
+                                        slotLabel: 'Funding needed',
+                                    }
+                                    : ledgerAttestationState(delivery);
+                                return (
                                 <tr key={delivery.id}>
                                     <td className="mono muted">{formatDateTime(delivery.createdAt)}</td>
                                     <td className="mono bold">{delivery.id}</td>
                                     <td title={`${delivery.payload || ''}\n${formatLedgerRoute(delivery)}`}>
-                                        <div className="bold" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{truncateText(delivery.payload, 42)}</div>
-                                        <div className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatLedgerRoute(delivery)}</div>
+                                        <div className="bold" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{truncateText(delivery.payload, 34)}</div>
                                     </td>
-                                    <td
-                                        className="muted mono"
-                                        title={delivery.solanaProgram || SOLANA_MEMO_PROGRAM}
-                                        style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                                    >
-                                        {truncateMiddle(delivery.solanaProgram || SOLANA_MEMO_PROGRAM)}
+                                    <td title={delivery.solanaProgram || SOLANA_MEMO_PROGRAM}>
+                                        <div className="bold" style={{ fontSize: 12, marginBottom: 3 }}>Memo Program</div>
+                                        <div className="muted mono" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                            {truncateMiddle(delivery.solanaProgram || SOLANA_MEMO_PROGRAM, 14, 12)}
+                                        </div>
                                     </td>
-                                    <td className="mono muted">{delivery.solanaSlot || '-'}</td>
+                                    <td className="mono muted">{attestation.slotLabel}</td>
                                     <td>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                            <span className="tx-pill" title={delivery.solanaTx || 'Pending attestation'}>
-                                                <LinkIcon size={11} /> {formatSolanaSignature(delivery.solanaTx)}
-                                                <span className="tx-verified"><Lock size={10} /> {delivery.solanaOnChain ? 'Confirmed' : 'Pending'}</span>
+                                            <span className="tx-pill" title={delivery.solanaTx || attestation.label}>
+                                                <LinkIcon size={11} /> {delivery.solanaOnChain ? formatSolanaSignature(delivery.solanaTx) : attestation.label}
+                                                <span className="tx-verified"><Lock size={10} /> {attestation.label}</span>
                                             </span>
                                             {delivery.solanaOnChain && delivery.solanaExplorerUrl && (
                                                 <a href={delivery.solanaExplorerUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--accent)' }}>
                                                     Explorer <ExternalLink size={12} />
                                                 </a>
                                             )}
+                                            {!delivery.solanaOnChain && (
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary"
+                                                    style={{ padding: '5px 10px', fontSize: 11 }}
+                                                    onClick={() => retryLedgerAttestations(delivery.id)}
+                                                    disabled={isRetryingLedger}
+                                                >
+                                                    Retry
+                                                </button>
+                                            )}
                                         </div>
                                         <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
                                             {delivery.solanaOnChain
-                                                ? 'Confirmed on Solana devnet'
-                                                : delivery.solanaAttestationError
-                                                    ? delivery.solanaAttestationError.includes('429')
-                                                        ? 'Devnet faucet unavailable for fee funding'
-                                                        : 'Retrying devnet publication'
-                                                    : 'Waiting for devnet confirmation'}
+                                                ? attestation.detail
+                                                : (fundingRequired || isFundingBlocked(delivery)) && ledgerStatus?.authorityAddress
+                                                    ? `Fund ${truncateMiddle(ledgerStatus.authorityAddress, 12, 10)} on devnet, then retry.`
+                                                    : attestation.detail}
                                         </div>
                                         {delivery.solanaAccountPda && (
                                             <div
@@ -647,7 +817,8 @@ export default function DistributorPortal() {
                                         )}
                                     </td>
                                 </tr>
-                            ))}
+                                );
+                            })}
                             {completedDeliveries.length === 0 && <tr><td colSpan={6} className="empty-row">No delivered manifests are ready for custody attestation yet.</td></tr>}
                         </tbody>
                     </table>

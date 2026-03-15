@@ -90,16 +90,21 @@ async function ensureBalance(connection, payer) {
 
     if (!airdropPromise) {
         airdropPromise = (async () => {
-            const signature = await connection.requestAirdrop(
-                payer.publicKey,
-                Math.max(TARGET_BALANCE_LAMPORTS - balance, 0.1 * LAMPORTS_PER_SOL)
-            );
-            const latestBlockhash = await connection.getLatestBlockhash('confirmed');
-            await connection.confirmTransaction({
-                signature,
-                blockhash: latestBlockhash.blockhash,
-                lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-            }, 'confirmed');
+            try {
+                const signature = await connection.requestAirdrop(
+                    payer.publicKey,
+                    Math.max(TARGET_BALANCE_LAMPORTS - balance, 0.1 * LAMPORTS_PER_SOL)
+                );
+                const latestBlockhash = await connection.getLatestBlockhash('confirmed');
+                await connection.confirmTransaction({
+                    signature,
+                    blockhash: latestBlockhash.blockhash,
+                    lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+                }, 'confirmed');
+            } catch (error) {
+                const message = String(error?.message || error || 'Unknown Solana funding failure');
+                throw new Error(`Funding required for devnet fee payer ${payer.publicKey.toBase58()}. ${message}`);
+            }
         })().finally(() => {
             airdropPromise = null;
         });
@@ -185,5 +190,33 @@ export async function createSolanaAttestation(delivery = {}) {
         solanaOnChain: true,
         solanaAttestedAt: new Date(),
         solanaAttestationError: '',
+    };
+}
+
+export async function getSolanaAuthorityStatus() {
+    const connection = getConnection();
+    const payer = await loadAuthorityKeypair();
+
+    let balanceLamports = null;
+    let balanceError = '';
+    try {
+        balanceLamports = await connection.getBalance(payer.publicKey, 'confirmed');
+    } catch (error) {
+        balanceError = String(error?.message || error || 'Unable to load devnet balance');
+    }
+
+    return {
+        cluster: DEVNET_CLUSTER,
+        rpcUrl: process.env.SOLANA_RPC_URL || clusterApiUrl(DEVNET_CLUSTER),
+        memoProgram: MEMO_PROGRAM_ADDRESS,
+        authorityAddress: payer.publicKey.toBase58(),
+        authorityExplorerUrl: `https://explorer.solana.com/address/${payer.publicKey.toBase58()}?cluster=${DEVNET_CLUSTER}`,
+        balanceLamports,
+        balanceSol: balanceLamports == null ? null : Number((balanceLamports / LAMPORTS_PER_SOL).toFixed(6)),
+        minimumBalanceSol: Number((MINIMUM_BALANCE_LAMPORTS / LAMPORTS_PER_SOL).toFixed(6)),
+        canSubmitTransactions: Number.isFinite(balanceLamports) && balanceLamports >= MINIMUM_BALANCE_LAMPORTS,
+        fundingRequired: !Number.isFinite(balanceLamports) || balanceLamports < MINIMUM_BALANCE_LAMPORTS,
+        configuredWithEnvKey: Boolean(parseSecretKey(process.env.SOLANA_DEVNET_SECRET_KEY)),
+        balanceError,
     };
 }

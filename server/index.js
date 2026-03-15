@@ -22,7 +22,7 @@ import {
     planDroneRelocation,
     planDeliveryOperation,
 } from './services/operations.js';
-import { createSolanaAttestation, deriveDeliveryPda } from './services/solana.js';
+import { createSolanaAttestation, deriveDeliveryPda, getSolanaAuthorityStatus } from './services/solana.js';
 import { buildWeatherIndex, getWeatherSnapshots } from './services/weather.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -684,12 +684,17 @@ function buildDeliveryUpdate(current, planned) {
 
 const solanaAttestationJobs = new Map();
 
-function shouldAttestOnChain(delivery = {}) {
-    return delivery.status === 'DELIVERED' && !delivery.solanaOnChain;
+function isFundingBlockedAttestation(payload = {}) {
+    return String(payload.solanaAttestationError || '').toLowerCase().includes('funding required');
 }
 
-async function queueDeliveryAttestation(deliveryDoc) {
-    if (!deliveryDoc || !shouldAttestOnChain(serializeDoc(deliveryDoc))) {
+function shouldAttestOnChain(delivery = {}) {
+    return delivery.status === 'DELIVERED' && !delivery.solanaOnChain && !isFundingBlockedAttestation(delivery);
+}
+
+async function queueDeliveryAttestation(deliveryDoc, options = {}) {
+    const currentState = deliveryDoc ? serializeDoc(deliveryDoc) : null;
+    if (!deliveryDoc || (!options.force && !shouldAttestOnChain(currentState))) {
         return null;
     }
 
@@ -700,6 +705,8 @@ async function queueDeliveryAttestation(deliveryDoc) {
     const job = (async () => {
         try {
             const current = serializeDoc(deliveryDoc);
+            deliveryDoc.solanaAttestationError = '';
+            await deliveryDoc.save();
             const attestation = await createSolanaAttestation(current);
             const next = buildDeliveryPayload({
                 ...current,
@@ -2551,6 +2558,53 @@ app.patch('/api/deliveries/:id/status', async (req, res) => {
             await queueDeliveryAttestation(delivery);
         }
         res.json(serializeDoc(delivery));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+app.get('/api/solana/status', async (req, res) => {
+    try {
+        const status = await getSolanaAuthorityStatus();
+        res.json(status);
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+app.post('/api/solana/attestations/retry', async (req, res) => {
+    try {
+        const deliveryId = String(req.body?.deliveryId || '').trim();
+        const status = await getSolanaAuthorityStatus();
+        if (!status.canSubmitTransactions) {
+            return res.status(409).json({
+                error: `Fund the devnet signer ${status.authorityAddress} before retrying attestations.`,
+                solana: status,
+            });
+        }
+
+        const deliveries = deliveryId
+            ? await Delivery.find({ id: deliveryId, status: 'DELIVERED' })
+            : await Delivery.find({ status: 'DELIVERED', solanaOnChain: false }).sort({ createdAt: -1 });
+
+        if (deliveryId && deliveries.length === 0) {
+            return res.status(404).json({ error: 'Delivered manifest not found for retry.' });
+        }
+
+        for (const delivery of deliveries) {
+            await queueDeliveryAttestation(delivery, { force: true });
+        }
+
+        const overview = await buildOperationalOverview();
+        const refreshedStatus = await getSolanaAuthorityStatus();
+        res.json({
+            retried: deliveries.length,
+            deliveryId: deliveryId || null,
+            solana: refreshedStatus,
+            deliveries: overview.deliveries.filter((delivery) => (
+                delivery.status === 'DELIVERED' && (!deliveryId || delivery.id === deliveryId)
+            )),
+        });
     } catch (err) {
         sendApiError(res, err);
     }

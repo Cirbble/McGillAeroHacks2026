@@ -404,6 +404,7 @@ function getStatusPresentation(delivery) {
         REROUTED: { label: 'Rerouted', badge: 'badge-yellow' },
         REJECTED: { label: 'Rejected', badge: 'badge-red' },
         CANCELLED: { label: 'Cancelled', badge: 'badge-neutral' },
+        ARRIVED: { label: 'Arrived — Awaiting Clinic', badge: 'badge-green' },
         DELIVERED: { label: 'Delivered', badge: 'badge-green' },
         PENDING_DISPATCH: { label: 'Pending Dispatch', badge: 'badge-neutral' },
     };
