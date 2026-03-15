@@ -86,7 +86,7 @@ export default function DistributorPortal() {
         } catch (err) { alert('Error: ' + err.message); }
     };
 
-    /* ΓöÇΓöÇ Confirmation Modal ΓöÇΓöÇ */
+    /* ── Confirmation Modal ── */
     const ConfirmModal = () => {
         if (!confirmAction) return null;
         return (
@@ -109,7 +109,7 @@ export default function DistributorPortal() {
         );
     };
 
-    /* ΓöÇΓöÇ Overview with Map + Drone Panel ΓöÇΓöÇ */
+    /* ── Overview with Map + Drone Panel ── */
     if (hash === '') {
         return (
             <div>
@@ -157,7 +157,7 @@ export default function DistributorPortal() {
                                     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                         <div style={{ color: '#334155', fontSize: 11, fontFamily: 'var(--mono)', textAlign: 'center' }}>
                                             <Camera size={24} style={{ opacity: 0.3, marginBottom: 6 }} /><br />
-                                            LIVE FEED ΓÇö {selectedDrone.id}
+                                            LIVE FEED — {selectedDrone.id}
                                         </div>
                                     </div>
                                     <div style={{ position: 'absolute', top: 8, left: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -172,7 +172,7 @@ export default function DistributorPortal() {
                                         <div><Battery size={11} style={{ verticalAlign: 'middle' }} /> Battery: <strong>{selectedDrone.battery}%</strong></div>
                                         <div><Gauge size={11} style={{ verticalAlign: 'middle' }} /> Speed: <strong>{selectedDrone.speed || 0} km/h</strong></div>
                                         <div>Status: <span className={`badge ${selectedDrone.status === 'on_route' ? 'badge-blue' : 'badge-green'}`}>{selectedDrone.status}</span></div>
-                                        <div>Location: <strong>{selectedDrone.target_location || selectedDrone.location || 'ΓÇö'}</strong></div>
+                                        <div>Location: <strong>{selectedDrone.target_location || selectedDrone.location || '—'}</strong></div>
                                     </div>
                                 </div>
                             </div>
@@ -194,7 +194,7 @@ export default function DistributorPortal() {
                                     onClick={() => setSelectedDroneId(d.id === selectedDroneId ? null : d.id)}>
                                     <td className="mono bold">{d.id}</td>
                                     <td className="muted">{d.model}</td>
-                                    <td>{d.target_location || d.location || 'ΓÇö'}</td>
+                                    <td>{d.target_location || d.location || '—'}</td>
                                     <td>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                             <div style={{ width: 40, height: 4, background: 'var(--border)', borderRadius: 2 }}>
@@ -217,7 +217,7 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ΓöÇΓöÇ Incoming Requests ΓöÇΓöÇ */
+    /* ── Incoming Requests ── */
     if (hash === '#requests') {
         return (
             <div>
@@ -243,7 +243,7 @@ export default function DistributorPortal() {
                                         {r.geminiSummary && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 6, lineHeight: 1.5 }}>{r.geminiSummary}</div>}
                                         <div style={{ fontSize: 12, color: 'var(--text-tertiary)', display: 'flex', gap: 16 }}>
                                             {r.requestedBy && <span><MapPin size={11} style={{ verticalAlign: 'middle' }} /> From: <strong>{r.requestedBy}</strong></span>}
-                                            <span>Route: {r.origin} ΓåÆ {r.destination}</span>
+                                            <span>Route: {r.origin} → {r.destination}</span>
                                         </div>
                                         {r.clinicNotes && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>"{r.clinicNotes}"</div>}
                                     </div>
@@ -260,7 +260,7 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ΓöÇΓöÇ Active Deliveries ΓöÇΓöÇ */
+    /* ── Active Deliveries ── */
     if (hash === '#active') {
         return (
             <div>
@@ -287,7 +287,7 @@ export default function DistributorPortal() {
                                         )}
                                     </div>
                                     <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>{d.payload}</div>
-                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>{d.origin} ΓåÆ {d.destination} ┬╖ Last seen: {d.lastStation}</div>
+                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>{d.origin} → {d.destination} · Last seen: {d.lastStation}</div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                                         <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 3 }}>
                                             <div style={{ width: `${progress}%`, height: '100%', background: d.priority === 'Emergency' ? '#ef4444' : 'var(--accent)', borderRadius: 3, transition: 'width 0.5s' }} />
@@ -300,7 +300,7 @@ export default function DistributorPortal() {
                                                 <span key={i} style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
                                                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: i < d.currentLeg ? 'var(--accent)' : i === d.currentLeg ? '#f59e0b' : 'var(--border)', border: '2px solid white', boxShadow: '0 0 0 1px var(--border)' }} />
                                                     <span style={{ fontWeight: i === d.currentLeg ? 700 : 400, color: i < d.currentLeg ? 'var(--accent)' : 'var(--text-secondary)' }}>{stop}</span>
-                                                    {i < d.route.length - 1 && <span style={{ color: 'var(--text-tertiary)', margin: '0 2px' }}>ΓåÆ</span>}
+                                                    {i < d.route.length - 1 && <span style={{ color: 'var(--text-tertiary)', margin: '0 2px' }}>→</span>}
                                                 </span>
                                             ))}
                                         </div>
@@ -314,7 +314,7 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ΓöÇΓöÇ Dispatch Console ΓöÇΓöÇ */
+    /* ── Dispatch Console ── */
     if (hash === '#dispatch') {
         return (
             <div>
@@ -336,7 +336,7 @@ export default function DistributorPortal() {
                                     </div>
                                     {error && <div className="info-box" style={{ marginBottom: 16, background: 'var(--danger-light)', borderColor: '#fca5a5', color: 'var(--danger)' }}>{error}</div>}
                                     <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '12px' }} disabled={isProcessing || !aiPrompt}>
-                                        {isProcessing ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Processing with GeminiΓÇª</> : 'Generate Route & Queue Launch'}
+                                        {isProcessing ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Processing with Gemini...</> : 'Generate Route & Queue Launch'}
                                     </button>
                                 </form>
                             ) : (
@@ -357,7 +357,7 @@ export default function DistributorPortal() {
                         <div className="card" style={{ padding: 20 }}>
                             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 12, textTransform: 'uppercase' }}>AI Route Result</div>
                             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{geminiResult.payload}</div>
-                            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>{geminiResult.origin} ΓåÆ {geminiResult.destination}</div>
+                            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>{geminiResult.origin} → {geminiResult.destination}</div>
                             {geminiResult.route && geminiResult.route.map((stop, i) => (
                                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, marginBottom: 4 }}>
                                     <div style={{ width: 8, height: 8, borderRadius: '50%', background: i === 0 || i === geminiResult.route.length - 1 ? 'var(--accent)' : 'var(--border-strong)', border: '2px solid white', boxShadow: '0 0 0 1px var(--border)' }} />
@@ -365,7 +365,7 @@ export default function DistributorPortal() {
                                 </div>
                             ))}
                             {geminiResult.reasoning && <div style={{ marginTop: 8, padding: '10px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}><Route size={12} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle' }} />{geminiResult.reasoning}</div>}
-                            <div className="info-box info-box-green" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10 }}><CheckCircle2 size={18} /><div><strong>Queued</strong> ΓÇö delivery added to dispatch queue.</div></div>
+                            <div className="info-box info-box-green" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10 }}><CheckCircle2 size={18} /><div><strong>Queued</strong> — delivery added to dispatch queue.</div></div>
                         </div>
                     )}
                 </div>
@@ -373,7 +373,7 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ΓöÇΓöÇ Custody Ledger ΓöÇΓöÇ */
+    /* ── Custody Ledger ── */
     if (hash === '#ledger') {
         return (
             <div>
@@ -383,7 +383,7 @@ export default function DistributorPortal() {
                         <thead><tr><th>Timestamp</th><th>ID</th><th>Payload</th><th>Route</th><th>Transaction</th></tr></thead>
                         <tbody>
                             {allApproved.map(d => (
-                                <tr key={d.id}><td className="mono muted">{new Date(d.createdAt).toLocaleString()}</td><td className="mono bold">{d.id}</td><td className="bold">{d.payload}</td><td className="muted">{d.origin} ΓåÆ {d.destination}</td>
+                                <tr key={d.id}><td className="mono muted">{new Date(d.createdAt).toLocaleString()}</td><td className="mono bold">{d.id}</td><td className="bold">{d.payload}</td><td className="muted">{d.origin} → {d.destination}</td>
                                     <td><span className="tx-pill"><LinkIcon size={11} /> {d.solanaTx}<span className="tx-verified"><Lock size={10} /> Verified</span></span></td></tr>
                             ))}
                             {allApproved.length === 0 && <tr><td colSpan={5} className="empty-row">No records.</td></tr>}
@@ -394,7 +394,7 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ΓöÇΓöÇ History ΓöÇΓöÇ */
+    /* ── History ── */
     if (hash === '#history') {
         return (
             <div>
@@ -403,7 +403,7 @@ export default function DistributorPortal() {
                     <table className="data-table">
                         <thead><tr><th>Date</th><th>ID</th><th>Payload</th><th>Route</th><th>Status</th></tr></thead>
                         <tbody>
-                            {allHistory.map(d => (<tr key={d.id}><td className="mono muted">{new Date(d.createdAt).toLocaleString()}</td><td className="mono bold">{d.id}</td><td className="bold">{d.payload}</td><td className="muted">{d.origin} ΓåÆ {d.destination}</td><td><span className={`badge ${statusBadge(d.status)}`}>{d.status}</span></td></tr>))}
+                            {allHistory.map(d => (<tr key={d.id}><td className="mono muted">{new Date(d.createdAt).toLocaleString()}</td><td className="mono bold">{d.id}</td><td className="bold">{d.payload}</td><td className="muted">{d.origin} → {d.destination}</td><td><span className={`badge ${statusBadge(d.status)}`}>{d.status}</span></td></tr>))}
                             {allHistory.length === 0 && <tr><td colSpan={5} className="empty-row">No history yet.</td></tr>}
                         </tbody>
                     </table>

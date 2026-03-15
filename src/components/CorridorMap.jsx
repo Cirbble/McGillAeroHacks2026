@@ -39,10 +39,10 @@ const makeDroneSvg = (color) => `<svg xmlns="http://www.w3.org/2000/svg" width="
  * Shared Corridor Map.
  * Props:
  *   stations, drones, deliveries, lines, height,
- *   showLines     ΓÇô render corridor lines + legend (admin only)
- *   selectedDroneId ΓÇô highlight a specific drone
- *   onDroneClick  ΓÇô callback(droneId)
- *   darkMode      ΓÇô use dark tiles (default true for operator/clinic)
+ *   showLines     — render corridor lines + legend (admin only)
+ *   selectedDroneId — highlight a specific drone
+ *   onDroneClick  — callback(droneId)
+ *   darkMode      — use dark tiles (default false)
  */
 export default function CorridorMapShared({
     stations = [], drones = [], deliveries = [], lines = [],
@@ -129,7 +129,7 @@ export default function CorridorMapShared({
                 const marker = L.marker([lat, lng], { icon: droneIcon })
                     .addTo(map)
                     .bindTooltip(
-                        `<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${drone.id}</strong> ┬╖ ${drone.name || ''}<br/><span style="color:#94a3b8">${drone.speed || 0} km/h ΓåÆ ${drone.target_location}</span>${isRelocating ? '<br/><span style="color:#3b82f6;font-weight:600">Relocating</span>' : ''}</div>`,
+                        `<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${drone.id}</strong> · ${drone.name || ''}<br/><span style="color:#94a3b8">${drone.speed || 0} km/h → ${drone.target_location}</span>${isRelocating ? '<br/><span style="color:#3b82f6;font-weight:600">Relocating</span>' : ''}</div>`,
                         { direction: 'top', offset: [0, -16] }
                     );
 
