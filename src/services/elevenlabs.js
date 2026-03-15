@@ -3,37 +3,75 @@ const VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
 
 let audioCtx = null;
 
+function getSpeechLocale(lang = 'en') {
+    return {
+        en: 'en-US',
+        fr: 'fr-CA',
+        iu: 'iu-Cans-CA',
+    }[lang] || 'en-US';
+}
+
+function speakWithBrowserVoices(text, lang = 'en') {
+    if (typeof window === 'undefined' || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === 'undefined') {
+        throw new Error('Speech synthesis is not available in this browser.');
+    }
+
+    return new Promise((resolve, reject) => {
+        const utterance = new window.SpeechSynthesisUtterance(text);
+        utterance.lang = getSpeechLocale(lang);
+        const voices = window.speechSynthesis.getVoices();
+        const matchingVoice = voices.find((voice) => voice.lang === utterance.lang)
+            || voices.find((voice) => voice.lang.startsWith(utterance.lang.split('-')[0]))
+            || null;
+        if (matchingVoice) {
+            utterance.voice = matchingVoice;
+        }
+        utterance.onend = resolve;
+        utterance.onerror = () => reject(new Error('Browser speech synthesis failed.'));
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+    });
+}
+
 export async function speakText(text, lang = 'en') {
     const langMap = { en: 'en', fr: 'fr', iu: 'iu' };
     const languageCode = langMap[lang] || 'en';
 
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?output_format=mp3_44100_128`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'xi-api-key': ELEVENLABS_KEY,
-        },
-        body: JSON.stringify({
-            text,
-            model_id: 'eleven_multilingual_v2',
-            ...(languageCode && languageCode !== 'iu' ? { language_code: languageCode } : {}),
-            voice_settings: { stability: 0.75, similarity_boost: 0.75 },
-        }),
-    });
+    if (!ELEVENLABS_KEY) {
+        return speakWithBrowserVoices(text, lang);
+    }
 
-    if (!response.ok) throw new Error(`ElevenLabs API error: ${response.status}`);
+    try {
+        const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?output_format=mp3_44100_128`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'xi-api-key': ELEVENLABS_KEY,
+            },
+            body: JSON.stringify({
+                text,
+                model_id: 'eleven_multilingual_v2',
+                ...(languageCode && languageCode !== 'iu' ? { language_code: languageCode } : {}),
+                voice_settings: { stability: 0.75, similarity_boost: 0.75 },
+            }),
+        });
 
-    if (!audioCtx) audioCtx = new AudioContext();
-    const arrayBuffer = await response.arrayBuffer();
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    const source = audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(audioCtx.destination);
-    source.start(0);
+        if (!response.ok) throw new Error(`ElevenLabs API error: ${response.status}`);
 
-    return new Promise((resolve) => {
-        source.onended = resolve;
-    });
+        if (!audioCtx) audioCtx = new AudioContext();
+        const arrayBuffer = await response.arrayBuffer();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        const source = audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioCtx.destination);
+        source.start(0);
+
+        return await new Promise((resolve) => {
+            source.onended = resolve;
+        });
+    } catch {
+        return speakWithBrowserVoices(text, lang);
+    }
 }
 
 export function generateArrivalAlert(delivery, lang = 'en') {

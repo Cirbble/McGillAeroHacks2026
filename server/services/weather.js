@@ -27,6 +27,12 @@ const WEATHER_CODE_LABELS = {
     96: 'Thunderstorm with hail',
     99: 'Severe thunderstorm with hail',
 };
+const NORTHERN_QUEBEC_PROBES = [
+    { stationId: 'James Bay North Cell', lat: 54.35, lng: -79.2 },
+    { stationId: 'La Grande Highlands Cell', lat: 54.1, lng: -74.7 },
+    { stationId: 'Ungava Interior Cell', lat: 58.15, lng: -70.35 },
+    { stationId: 'Hudson Strait Cell', lat: 60.2, lng: -78.4 },
+];
 
 let weatherCache = {
     cacheKey: null,
@@ -40,6 +46,15 @@ function getWeatherLabel(code) {
 
 function round(value, digits = 1) {
     return Number(Number(value || 0).toFixed(digits));
+}
+
+function haversineKm(fromLat, fromLng, toLat, toLng) {
+    const earthRadiusKm = 6371;
+    const dLat = (toLat - fromLat) * Math.PI / 180;
+    const dLng = (toLng - fromLng) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2
+        + Math.cos(fromLat * Math.PI / 180) * Math.cos(toLat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    return earthRadiusKm * 2 * Math.asin(Math.sqrt(a));
 }
 
 function classifyWeather({
@@ -169,6 +184,8 @@ function buildRegionalFallbackSnapshot(station) {
 
     return {
         stationId: station.id,
+        lat: station.lat,
+        lng: station.lng,
         stationStatus: station.status,
         observedAt: new Date().toISOString(),
         tempC,
@@ -220,6 +237,8 @@ async function fetchStationWeather(station) {
         const payload = await response.json();
         const rawSnapshot = {
             stationId: station.id,
+            lat: station.lat,
+            lng: station.lng,
             stationStatus: station.status,
             observedAt: payload.current?.time || new Date().toISOString(),
             tempC: payload.current?.temperature_2m ?? station.temp,
@@ -246,6 +265,89 @@ async function fetchStationWeather(station) {
     } finally {
         clearTimeout(timeoutId);
     }
+}
+
+function buildNorthernQuebecProbes(stations = [], snapshots = []) {
+    const stationById = Object.fromEntries(stations.map((station) => [station.id, station]));
+    const usableSnapshots = snapshots
+        .map((snapshot) => ({
+            ...snapshot,
+            lat: snapshot.lat ?? stationById[snapshot.stationId]?.lat,
+            lng: snapshot.lng ?? stationById[snapshot.stationId]?.lng,
+        }))
+        .filter((snapshot) => (
+            Number.isFinite(Number(snapshot.lat))
+            && Number.isFinite(Number(snapshot.lng))
+            && ['open-meteo', 'open-meteo-stale'].includes(snapshot.source)
+        ));
+
+    if (usableSnapshots.length === 0) return [];
+
+    return NORTHERN_QUEBEC_PROBES.map((probe) => {
+        const nearest = [...usableSnapshots]
+            .map((snapshot) => ({
+                snapshot,
+                distanceKm: haversineKm(probe.lat, probe.lng, Number(snapshot.lat), Number(snapshot.lng)),
+            }))
+            .sort((left, right) => left.distanceKm - right.distanceKm)
+            .slice(0, 3);
+        if (nearest.length === 0) return null;
+
+        const weighted = nearest.reduce((accumulator, entry) => {
+            const weight = 1 / Math.max(entry.distanceKm, 1);
+            accumulator.weight += weight;
+            accumulator.tempC += Number(entry.snapshot.tempC || 0) * weight;
+            accumulator.windSpeedKph += Number(entry.snapshot.windSpeedKph || 0) * weight;
+            accumulator.windGustKph += Number(entry.snapshot.windGustKph || 0) * weight;
+            accumulator.visibilityKm += Number(entry.snapshot.visibilityKm || 0) * weight;
+            accumulator.precipitationMm += Number(entry.snapshot.precipitationMm || 0) * weight;
+            accumulator.precipitationProbabilityPct += Number(entry.snapshot.precipitationProbabilityPct || 0) * weight;
+            accumulator.snowfallCm += Number(entry.snapshot.snowfallCm || 0) * weight;
+            accumulator.weatherCodes.push({
+                code: entry.snapshot.weatherCode || 0,
+                weight,
+            });
+            return accumulator;
+        }, {
+            weight: 0,
+            tempC: 0,
+            windSpeedKph: 0,
+            windGustKph: 0,
+            visibilityKm: 0,
+            precipitationMm: 0,
+            precipitationProbabilityPct: 0,
+            snowfallCm: 0,
+            weatherCodes: [],
+        });
+
+        const dominantWeatherCode = weighted.weatherCodes
+            .sort((left, right) => right.weight - left.weight)[0]?.code || 0;
+        const rawProbe = {
+            stationId: probe.stationId,
+            lat: probe.lat,
+            lng: probe.lng,
+            stationStatus: 'online',
+            observedAt: new Date().toISOString(),
+            tempC: round(weighted.tempC / weighted.weight, 1),
+            windSpeedKph: round(weighted.windSpeedKph / weighted.weight, 1),
+            windGustKph: round((weighted.windGustKph / weighted.weight) + 4, 1),
+            visibilityKm: round(Math.max(2.5, (weighted.visibilityKm / weighted.weight) - 0.8), 1),
+            precipitationMm: round(weighted.precipitationMm / weighted.weight, 1),
+            precipitationProbabilityPct: round(Math.min(95, (weighted.precipitationProbabilityPct / weighted.weight) + 6), 0),
+            snowfallCm: round(weighted.snowfallCm / weighted.weight, 1),
+            weatherCode: dominantWeatherCode,
+            weatherCodeLabel: getWeatherLabel(dominantWeatherCode),
+            source: 'northern-quebec-synthetic',
+            synthetic: true,
+            derivedFrom: nearest.map((entry) => entry.snapshot.stationId),
+        };
+
+        return {
+            ...rawProbe,
+            ...classifyWeather(rawProbe),
+            summary: `${rawProbe.weatherCodeLabel} | ${round(rawProbe.tempC)} C | gusts ${round(rawProbe.windGustKph)} km/h | visibility ${round(rawProbe.visibilityKm)} km`,
+        };
+    }).filter(Boolean);
 }
 
 export function buildWeatherIndex(snapshots = []) {
@@ -280,6 +382,7 @@ export async function getWeatherSnapshots(stations = []) {
 
         return buildUnavailableSnapshot(station);
     });
+    const probes = buildNorthernQuebecProbes(stations, snapshots);
 
     const source = settled.every((result) => result.status === 'fulfilled')
         ? 'open-meteo'
@@ -288,8 +391,9 @@ export async function getWeatherSnapshots(stations = []) {
             : 'open-meteo-live+regional-analog';
     const payload = {
         updatedAt: new Date().toISOString(),
-        source,
+        source: probes.length > 0 ? `${source}+synthetic-northern-probes` : source,
         stations: snapshots,
+        probes,
     };
 
     weatherCache = {

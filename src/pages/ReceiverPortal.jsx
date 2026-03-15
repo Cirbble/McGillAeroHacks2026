@@ -79,32 +79,51 @@ function getDraftStorageKey(email) {
 }
 
 function readStoredDraft(email) {
-    if (typeof window === 'undefined') return { prompt: '', preview: null };
+    if (typeof window === 'undefined') return { prompt: '', preview: null, lang: 'en' };
     try {
         const raw = window.localStorage.getItem(getDraftStorageKey(email));
-        if (!raw) return { prompt: '', preview: null };
+        if (!raw) return { prompt: '', preview: null, lang: 'en' };
         const parsed = JSON.parse(raw);
         return {
             prompt: typeof parsed?.prompt === 'string' ? parsed.prompt : '',
             preview: parsed?.preview && typeof parsed.preview === 'object' ? parsed.preview : null,
+            lang: ['en', 'fr', 'iu'].includes(parsed?.lang) ? parsed.lang : 'en',
         };
     } catch {
-        return { prompt: '', preview: null };
+        return { prompt: '', preview: null, lang: 'en' };
     }
 }
 
-function persistDraft(email, prompt, preview) {
+function persistDraft(email, prompt, preview, lang) {
     if (typeof window === 'undefined') return;
     const storageKey = getDraftStorageKey(email);
     if (!prompt.trim() && !preview) {
         window.localStorage.removeItem(storageKey);
         return;
     }
-    window.localStorage.setItem(storageKey, JSON.stringify({ prompt, preview }));
+    window.localStorage.setItem(storageKey, JSON.stringify({ prompt, preview, lang }));
 }
 
-function buildPreviewNarration(preview) {
+function buildPreviewNarration(preview, lang = 'en') {
     if (!preview) return '';
+    if (lang === 'fr') {
+        return [
+            `Apercu de la demande pour ${preview.destination}.`,
+            `Contenu: ${preview.payload}.`,
+            `Priorite: ${preview.priority}.`,
+            preview.geminiSummary || preview.reasoning || '',
+            preview.clinicNotes ? `Notes: ${preview.clinicNotes}.` : '',
+        ].filter(Boolean).join(' ');
+    }
+    if (lang === 'iu') {
+        return [
+            `${preview.destination} request preview.`,
+            `Payload: ${preview.payload}.`,
+            `Priority: ${preview.priority}.`,
+            preview.geminiSummary || preview.reasoning || '',
+            preview.clinicNotes ? `Notes: ${preview.clinicNotes}.` : '',
+        ].filter(Boolean).join(' ');
+    }
     return [
         `Request preview for ${preview.destination}.`,
         `Payload: ${preview.payload}.`,
@@ -120,6 +139,14 @@ function getCurrentStep(status) {
     if (['REQUESTED', 'AWAITING_REVIEW'].includes(status)) return 1;
     if (['PENDING_DISPATCH', 'READY_TO_LAUNCH'].includes(status)) return 2;
     return 3;
+}
+
+function getSpeechRecognitionLocale(lang) {
+    return {
+        en: 'en-US',
+        fr: 'fr-CA',
+        iu: 'iu-Cans-CA',
+    }[lang] || 'en-US';
 }
 
 function RequestTimeline({ status }) {
@@ -165,7 +192,7 @@ export default function ReceiverPortal({ user }) {
     const requesterName = user?.name || clinicName;
 
     const initialDraft = readStoredDraft(receiverEmail);
-    const [lang, setLang] = useState('en');
+    const [lang, setLang] = useState(initialDraft.lang);
     const [requestPrompt, setRequestPrompt] = useState(initialDraft.prompt);
     const [draftPreview, setDraftPreview] = useState(initialDraft.preview);
     const [isRecording, setIsRecording] = useState(false);
@@ -183,8 +210,8 @@ export default function ReceiverPortal({ user }) {
     }, []);
 
     useEffect(() => {
-        persistDraft(receiverEmail, requestPrompt, draftPreview);
-    }, [draftPreview, receiverEmail, requestPrompt]);
+        persistDraft(receiverEmail, requestPrompt, draftPreview, lang);
+    }, [draftPreview, lang, receiverEmail, requestPrompt]);
 
     const relatedDeliveries = deliveries
         .filter((delivery) => (
@@ -237,7 +264,7 @@ export default function ReceiverPortal({ user }) {
         setDraftPreview(null);
         setRequestError(null);
         setRequestResult(null);
-        persistDraft(receiverEmail, '', null);
+        persistDraft(receiverEmail, '', null, lang);
     };
 
     const toggleRecording = () => {
@@ -259,7 +286,7 @@ export default function ReceiverPortal({ user }) {
         const recognition = new Recognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        recognition.lang = getSpeechRecognitionLocale(lang);
         let finalTranscript = '';
 
         recognition.onresult = (event) => {
@@ -304,6 +331,7 @@ export default function ReceiverPortal({ user }) {
                 destination: receiverStation,
                 requestedBy: requesterName,
                 requestedByEmail: receiverEmail,
+                language: lang,
             });
             setDraftPreview(preview);
         } catch (err) {
@@ -326,6 +354,7 @@ export default function ReceiverPortal({ user }) {
                 requestedBy: requesterName,
                 requestedByEmail: receiverEmail,
                 status: 'REQUESTED',
+                language: lang,
             });
             clearDraft();
             setRequestResult(created);
@@ -340,7 +369,7 @@ export default function ReceiverPortal({ user }) {
         if (!draftPreview) return;
         setIsSpeaking(true);
         try {
-            await speakText(buildPreviewNarration(draftPreview), lang);
+            await speakText(buildPreviewNarration(draftPreview, lang), lang);
         } finally {
             setIsSpeaking(false);
         }
@@ -435,6 +464,17 @@ export default function ReceiverPortal({ user }) {
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 340px', gap: 16 }}>
                     <div className="card" style={{ padding: 24 }}>
                         <form onSubmit={generatePreview}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                                <div>
+                                    <div className="form-label" style={{ marginBottom: 4 }}>Request language</div>
+                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Generation, dictation, and read-back will use this language.</div>
+                                </div>
+                                <select className="form-input" style={{ width: 120, margin: 0 }} value={lang} onChange={(event) => setLang(event.target.value)}>
+                                    <option value="en">English</option>
+                                    <option value="fr">Francais</option>
+                                    <option value="iu">Inuktitut</option>
+                                </select>
+                            </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                                 <label className="form-label" style={{ marginBottom: 0 }}>What do you need?</label>
                                 <button type="button" onClick={toggleRecording} style={{ border: 'none', borderRadius: 999, padding: '8px 12px', background: isRecording ? '#ef4444' : 'var(--accent-light)', color: isRecording ? 'white' : 'var(--accent)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>

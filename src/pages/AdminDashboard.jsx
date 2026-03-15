@@ -1184,6 +1184,7 @@ export default function AdminDashboard() {
     const [cortexLoading, setCortexLoading] = useState(false);
     const orderedStations = orderStations(stations);
     const weatherStations = opsOverview?.weather?.stations || [];
+    const weatherProbes = opsOverview?.weather?.probes || [];
     const displayDrones = drones.map((drone) => hydrateDroneForDisplay(drone, orderedStations, lines, weatherStations));
     const activeDrone = displayDrones.find((drone) => drone.status === 'on_route') || displayDrones[0] || null;
     const active = deliveries.filter((delivery) => !['DELIVERED', 'REJECTED', 'CANCELLED'].includes(delivery.status));
@@ -1541,6 +1542,7 @@ export default function AdminDashboard() {
                         <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-secondary)' }}>
                             <span><strong style={{ color: 'var(--text-primary)' }}>{active.length}</strong> open missions</span>
                             <span><strong style={{ color: metrics.severeStations > 0 ? '#dc2626' : metrics.watchStations > 0 ? '#f59e0b' : 'var(--text-primary)' }}>{metrics.watchStations}</strong> weather alerts</span>
+                            <span><strong style={{ color: '#2563eb' }}>{weatherProbes.length}</strong> northern probes</span>
                             <span><strong style={{ color: 'var(--text-primary)' }}>{metrics.onlineStations}</strong>/{metrics.totalStations} nodes online</span>
                             {opsLoading && <span style={{ color: 'var(--text-tertiary)' }}>Refreshing…</span>}
                         </div>
@@ -1607,16 +1609,22 @@ export default function AdminDashboard() {
                                 </div>
                             </div>
                         )}
-                        <OverviewWeatherMap
+                        <CorridorMapShared
                             height={580}
                             stations={orderedStations}
-                            drones={drones}
-                            deliveries={deliveries}
+                            drones={displayDrones}
+                            deliveries={selectedDelivery ? [selectedDelivery] : active}
                             lines={lines}
-                            weatherStations={weatherStations}
-                            highlightedDelivery={selectedDelivery}
-                            showWeatherOverlay={showWeatherOverlay}
-                            weatherOverlayMode={weatherOverlayMode}
+                            showLines
+                            highlightedDeliveryId={selectedDelivery?.id || null}
+                            weatherStations={[...weatherStations, ...weatherProbes]}
+                            showWeatherStations={showWeatherOverlay}
+                            weatherOverlay={showWeatherOverlay ? {
+                                url: GEOMET_WMS_URL,
+                                layers: (OVERLAY_MODE_CONFIG[weatherOverlayMode] || OVERLAY_MODE_CONFIG.satellite).wms.layers,
+                                styles: (OVERLAY_MODE_CONFIG[weatherOverlayMode] || OVERLAY_MODE_CONFIG.satellite).wms.styles,
+                                opacity: (OVERLAY_MODE_CONFIG[weatherOverlayMode] || OVERLAY_MODE_CONFIG.satellite).wms.opacity,
+                            } : null}
                         />
                     </div>
 

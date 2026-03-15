@@ -499,18 +499,26 @@ function sanitizeRequestedPayload(payload = {}) {
     const normalized = { ...payload };
     const rawPayload = String(payload.payload || '').trim();
     const lowered = rawPayload.toLowerCase();
+    const sourceContext = [
+        payload.payload,
+        payload.sourceText,
+        payload.clinicNotes,
+        payload.geminiSummary,
+    ].filter(Boolean).join(' ');
+    const likelyMedical = /(insulin|medication|medicine|meds|heart|cardiac|cardio|blood|vaccine|vaccin|antibiotic|dialysis|epinephrine|specimen|tissue|iv fluids?|analgesic|pharmacy|prescription|insuline|medicament|m[ée]dicament|m[ée]dicaments|sang|coeur|cardiaque|antibiotique|pharmacie|ordonnance|vaccins?)/i.test(sourceContext);
+    const clearlyUnauthorized = /(live animals?|pets?|cats?|dogs?|fireworks?|weapons?|ammunition|alcohol|beer|wine|personal shopping|groceries)/i.test(sourceContext);
 
     if (!rawPayload || lowered === 'awaiting input') {
         normalized.payload = 'Manifest details pending pharmacy confirmation';
         normalized.status = 'AWAITING_REVIEW';
         normalized.reasoning = 'Dispatch held until the pharmacy confirms payload details and quantity.';
         normalized.manualAttentionRequired = true;
-    } else if (/(live animals?|cats?)/i.test(rawPayload)) {
+    } else if (!likelyMedical && clearlyUnauthorized) {
         normalized.payload = 'Unauthorized cargo flagged by intake';
         normalized.status = 'REJECTED';
         normalized.reasoning = 'Rejected by policy: non-medical cargo cannot enter the medical relay corridor.';
         normalized.manualAttentionRequired = true;
-    } else if (/^drugs!?$/i.test(rawPayload)) {
+    } else if (!likelyMedical && /^drugs!?$/i.test(rawPayload)) {
         normalized.payload = 'Controlled substances request awaiting pharmacist release';
         normalized.status = 'AWAITING_REVIEW';
         normalized.reasoning = 'Controlled substance manifests require pharmacist sign-off before route allocation.';

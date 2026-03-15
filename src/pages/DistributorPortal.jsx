@@ -422,13 +422,15 @@ export default function DistributorPortal() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                         {activeDeliveries.map((delivery) => {
                             const progress = delivery.totalLegs > 0 ? Math.round((delivery.currentLeg / delivery.totalLegs) * 100) : 0;
-                            const nextStop = Array.isArray(delivery.route) && delivery.route.length > 0
-                                ? delivery.route[Math.min(delivery.currentLeg || 0, delivery.route.length - 1)]
+                            const nextStop = Array.isArray(delivery.route) && delivery.route.length > 1
+                                ? delivery.route[Math.min((delivery.currentLeg || 0) + 1, delivery.route.length - 1)]
                                 : delivery.destination;
                             const statusDetail = delivery.status === 'PENDING_DISPATCH'
                                 ? 'Route review in progress'
                                 : delivery.status === 'READY_TO_LAUNCH'
-                                    ? 'Waiting for an available drone'
+                                    ? (Array.isArray(delivery.route) && delivery.route.length > 1
+                                        ? `Queued for launch to ${nextStop || delivery.destination}`
+                                        : 'Awaiting route recovery')
                                     : delivery.status === 'WEATHER_HOLD'
                                         ? 'Mission paused for corridor conditions'
                                         : `Heading to ${nextStop || delivery.destination}`;
@@ -551,7 +553,7 @@ export default function DistributorPortal() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16, marginBottom: 16 }}>
                     <div className="stat-card"><div className="stat-label">ATTESTED DELIVERIES</div><div className="stat-value">{completedDeliveries.length}</div><div className="stat-sub stat-sub-muted">Each manifest gets a transaction signature.</div></div>
                     <div className="stat-card"><div className="stat-label">SOLANA NETWORK</div><div className="stat-value">{completedDeliveries[0]?.solanaNetwork || 'devnet'}</div><div className="stat-sub stat-sub-muted">Fast settlement and public verification.</div></div>
-                    <div className="stat-card"><div className="stat-label">PROGRAM</div><div className="stat-value" style={{ fontSize: 22 }}>{completedDeliveries[0]?.solanaProgram || 'Memo Program v2'}</div><div className="stat-sub stat-sub-muted">Memo + PDA attestations keep custody records tamper-evident.</div></div>
+                    <div className="stat-card"><div className="stat-label">PROGRAM</div><div className="stat-value" style={{ fontSize: 22 }}>{completedDeliveries[0]?.solanaProgram || 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'}</div><div className="stat-sub stat-sub-muted">Memo + PDA attestations keep custody records tamper-evident.</div></div>
                 </div>
                 <div className="card" style={{ marginBottom: 16, padding: 18 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>Why Solana helps</div>
@@ -572,7 +574,7 @@ export default function DistributorPortal() {
                                         <div className="muted" style={{ fontSize: 12 }}>{delivery.origin} to {delivery.destination}</div>
                                         {delivery.solanaMemo && <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{delivery.solanaMemo}</div>}
                                     </td>
-                                    <td className="muted">{delivery.solanaProgram || 'Memo Program v2'}</td>
+                                    <td className="muted">{delivery.solanaProgram || 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'}</td>
                                     <td className="mono muted">{delivery.solanaSlot || '-'}</td>
                                     <td>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
