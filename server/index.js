@@ -642,6 +642,10 @@ async function seedData() {
     console.log('Deliveries synced.');
 }
 
+function shouldAutoSeed() {
+    return String(process.env.AUTO_SEED_DEMO_DATA || '').trim().toLowerCase() === 'true';
+}
+
 app.get('/api/lines', async (req, res) => {
     try {
         const lines = await Line.find({}, '-_id -__v -createdAt -updatedAt');
@@ -1180,7 +1184,11 @@ app.post('/api/cortex/chat', async (req, res) => {
 mongoose.connect(process.env.MONGODB_URI)
     .then(async () => {
         console.log('Connected to MongoDB Atlas.');
-        await seedData();
+        if (shouldAutoSeed()) {
+            await seedData();
+        } else {
+            console.log('Skipping demo data seed. Set AUTO_SEED_DEMO_DATA=true to reseed on startup.');
+        }
         await buildOperationalOverview();
         app.listen(3001, () => console.log('API server running on http://localhost:3001'));
     })
