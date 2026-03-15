@@ -316,11 +316,86 @@ function clearDroneRelocationState(drone) {
     };
 }
 
+const SOLANA_BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+function hashString(value = '') {
+    return [...String(value)].reduce((total, character, index) => (
+        (total + (character.charCodeAt(0) * (index + 17))) % 2147483647
+    ), 0);
+}
+
+function buildBase58Token(seed, length = 44) {
+    let state = Math.max(1, hashString(seed));
+    let token = '';
+
+    for (let index = 0; index < length; index += 1) {
+        state = (state * 48271) % 2147483647;
+        token += SOLANA_BASE58_ALPHABET[state % SOLANA_BASE58_ALPHABET.length];
+    }
+
+    return token;
+}
+
+function buildSolanaLedgerMetadata(payload = {}) {
+    const seed = [
+        payload.id,
+        payload.payload,
+        payload.origin,
+        payload.destination,
+        payload.requestedByEmail || payload.requestedBy || payload.clinic,
+    ].filter(Boolean).join(':');
+    const network = payload.solanaNetwork || 'devnet';
+    const tx = String(payload.solanaTx || '').trim() || buildBase58Token(`${seed}:tx`, 88);
+    const memo = payload.solanaMemo || `Aeroed custody ${payload.id || 'pending'} ${payload.origin || 'hub'}>${payload.destination || 'clinic'}`;
+    const slot = Number.isFinite(Number(payload.solanaSlot))
+        ? Number(payload.solanaSlot)
+        : 280000000 + (hashString(`${seed}:slot`) % 9500000);
+    const program = payload.solanaProgram || 'Memo Program v2';
+    const accountPda = payload.solanaAccountPda || buildBase58Token(`${seed}:pda`, 44);
+
+    return {
+        solanaTx: tx,
+        solanaNetwork: network,
+        solanaSlot: slot,
+        solanaProgram: program,
+        solanaMemo: memo,
+        solanaAccountPda: accountPda,
+        solanaExplorerUrl: payload.solanaExplorerUrl || `https://explorer.solana.com/tx/${tx}?cluster=${network}`,
+    };
+}
+
+function computeSeverityScore(payload = {}) {
+    const numericScore = Number(payload.severityScore);
+    if (Number.isFinite(numericScore) && numericScore > 0) {
+        return Math.max(1, Math.min(5, Math.round(numericScore)));
+    }
+
+    const baseScore = payload.priority === 'Emergency'
+        ? 5
+        : payload.priority === 'Urgent'
+            ? 4
+            : 2;
+
+    if (payload.routeState === 'BLOCKED' || payload.weatherState === 'SEVERE') {
+        return Math.min(5, baseScore + 1);
+    }
+    if (payload.manualAttentionRequired || payload.weatherState === 'UNSTABLE') {
+        return Math.min(5, baseScore + 1);
+    }
+
+    return baseScore;
+}
+
 function buildDeliveryPayload(payload) {
     const estimatedMinutes = Number(payload.estimated_time_minutes || payload.estimatedMinutes || 120);
     const route = Array.isArray(payload.route) ? payload.route.filter(Boolean) : [];
     const totalLegs = Number(payload.estimated_legs || payload.totalLegs || Math.max(route.length - 1, 1));
     const currentLeg = Number(payload.currentLeg ?? 0);
+    const solanaLedger = buildSolanaLedgerMetadata(payload);
+    const createdAt = payload.createdAt
+        || payload.events?.[0]?.timestamp
+        || payload.lastReroutedAt
+        || new Date();
 
     return {
         id: payload.id,
@@ -328,12 +403,20 @@ function buildDeliveryPayload(payload) {
         origin: payload.origin || 'Chibougamau Hub',
         destination: payload.destination,
         priority: payload.priority || 'Routine',
+        assignedDrone: payload.assignedDrone || payload.assignment || null,
+        requestedBy: payload.requestedBy || '',
+        requestedByEmail: payload.requestedByEmail || '',
+        clinic: payload.clinic || '',
+        clinicNotes: payload.clinicNotes || '',
+        sourceText: payload.sourceText || '',
+        geminiSummary: payload.geminiSummary || '',
+        severityScore: computeSeverityScore(payload),
         status: DELIVERY_STATUSES.includes(payload.status) ? payload.status : 'PENDING_DISPATCH',
         currentLeg,
         totalLegs,
         lastStation: payload.lastStation || payload.origin || 'Chibougamau Hub',
         eta: payload.eta ? new Date(payload.eta) : generateETA(estimatedMinutes),
-        solanaTx: payload.solanaTx || `tx_${Math.random().toString(36).slice(2, 10)}...`,
+        ...solanaLedger,
         route,
         reasoning: payload.reasoning || '',
         estimatedTime: payload.estimatedTime || formatEstimatedTime(estimatedMinutes),
@@ -355,6 +438,7 @@ function buildDeliveryPayload(payload) {
         rerouteCount: Number(payload.rerouteCount || 0),
         lastReroutedAt: payload.lastReroutedAt ? new Date(payload.lastReroutedAt) : null,
         events: normalizeEvents(payload.events),
+        createdAt: new Date(createdAt),
     };
 }
 
@@ -495,7 +579,7 @@ async function buildOperationalOverview() {
     const metrics = buildOverviewMetrics({ deliveries, stations, weatherStations });
     const notifications = buildAdminNotifications(deliveries);
     const recommendation = buildDefaultRecommendation({ notifications, metrics, weatherStations });
-    const highlightPriority = ['REROUTED', 'WEATHER_HOLD', 'IN_TRANSIT', 'HANDOFF', 'READY_TO_LAUNCH', 'PENDING_DISPATCH', 'AWAITING_REVIEW'];
+    const highlightPriority = ['REROUTED', 'WEATHER_HOLD', 'IN_TRANSIT', 'HANDOFF', 'READY_TO_LAUNCH', 'PENDING_DISPATCH', 'REQUESTED', 'AWAITING_REVIEW'];
     const highlightedDeliveryId = highlightPriority
         .map((status) => deliveries.find((delivery) => delivery.status === status)?.id)
         .find(Boolean)
@@ -598,6 +682,21 @@ const GEMINI_DISPATCH_SCHEMA = {
     },
 };
 
+const GEMINI_REQUEST_PREVIEW_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['payload', 'priority', 'destination', 'summary', 'clinicNotes'],
+    properties: {
+        payload: { type: 'string' },
+        priority: { type: 'string', enum: ['Routine', 'Urgent', 'Emergency'] },
+        destination: { type: 'string' },
+        origin: { type: 'string' },
+        summary: { type: 'string' },
+        clinicNotes: { type: 'string' },
+        weight_kg: { type: 'number' },
+    },
+};
+
 async function getRoutingContext() {
     const [stations, lines, drones] = await Promise.all([
         Station.find({}, '-_id -__v -createdAt -updatedAt').lean(),
@@ -676,6 +775,104 @@ function buildFallbackDispatchPlan(prompt, stations) {
         estimated_time_minutes: priority === 'Emergency' ? 70 : 95,
         reasoning: 'Gemini structured output was unavailable, so the backend generated a fallback manifest from the request text.',
         model: 'fallback-parser',
+    };
+}
+
+function buildSupplyRequestPreviewPrompt({
+    prompt,
+    clinicName,
+    requestedBy,
+    defaultDestination,
+    stations,
+    weatherStations,
+}) {
+    const destinations = stations
+        .filter((station) => station.type !== 'distribution')
+        .map((station) => station.id);
+    const stationSummary = stations
+        .filter((station) => ['distribution', 'pick_up'].includes(station.type))
+        .map((station) => {
+            const weather = weatherStations.find((entry) => entry.stationId === station.id);
+            const weatherNote = weather && weather.condition !== 'CLEAR'
+                ? `, weather=${weather.condition}, issue=${weather.issues?.[0] || weather.summary}`
+                : '';
+            return `- ${station.id}: type=${station.type}, status=${station.status}${weatherNote}`;
+        })
+        .join('\n');
+
+    return `You are the Aero'ed clinic intake assistant for a medical drone relay corridor in Northern Quebec.
+
+Rewrite the clinic's natural-language request into a clean dispatcher-ready preview.
+- Keep the destination inside the available corridor destinations. Default to ${defaultDestination} unless the request clearly names another clinic.
+- Infer a medical payload name and urgency when the user is vague.
+- Put any timing constraints, patient-safety context, cold-chain notes, or handling instructions into clinicNotes.
+- summary should be one sentence explaining what dispatch should understand immediately.
+- Return only JSON that matches the required schema.
+
+CLINIC:
+- Clinic: ${clinicName}
+- Requester: ${requestedBy}
+
+AVAILABLE DESTINATIONS:
+${destinations.join(', ')}
+
+NETWORK SNAPSHOT:
+${stationSummary}
+
+USER REQUEST:
+${prompt}`;
+}
+
+function buildFallbackSupplyRequestPreview({
+    prompt,
+    clinicName,
+    defaultDestination,
+}) {
+    const normalizedPrompt = String(prompt || '').trim();
+    const lowerPrompt = normalizedPrompt.toLowerCase();
+    const priority = /(emergency|critical|stat|immediately|severe bleeding|anaphyl|stroke|cardiac)/i.test(normalizedPrompt)
+        ? 'Emergency'
+        : /(urgent|asap|tonight|same day|time-sensitive|fast)/i.test(normalizedPrompt)
+            ? 'Urgent'
+            : 'Routine';
+    const payload = normalizedPrompt
+        ? normalizedPrompt
+            .replace(/\s+/g, ' ')
+            .trim()
+            .replace(/^need\s+/i, '')
+        : 'Medical supplies requiring dispatcher review';
+
+    return {
+        payload: payload.charAt(0).toUpperCase() + payload.slice(1),
+        priority,
+        destination: defaultDestination,
+        origin: 'Chibougamau Hub',
+        clinicNotes: normalizedPrompt,
+        summary: `${clinicName} submitted a ${priority.toLowerCase()} request that should be reviewed by dispatch before launch approval.`,
+        model: 'fallback-clinic-intake',
+    };
+}
+
+function normalizeSupplyRequestPreview(result, {
+    prompt,
+    requestedBy,
+    requestedByEmail,
+    clinicName,
+    defaultDestination,
+}) {
+    return {
+        payload: String(result?.payload || 'Medical supplies requiring dispatcher review').trim(),
+        priority: ['Routine', 'Urgent', 'Emergency'].includes(result?.priority) ? result.priority : 'Routine',
+        origin: String(result?.origin || 'Chibougamau Hub').trim() || 'Chibougamau Hub',
+        destination: String(result?.destination || defaultDestination).trim() || defaultDestination,
+        clinicNotes: String(result?.clinicNotes || '').trim(),
+        geminiSummary: String(result?.summary || '').trim(),
+        weight_kg: Number.isFinite(Number(result?.weight_kg)) ? Number(result.weight_kg) : null,
+        sourceText: String(prompt || '').trim(),
+        requestedBy: String(requestedBy || clinicName || '').trim(),
+        requestedByEmail: String(requestedByEmail || '').trim(),
+        clinic: String(clinicName || '').trim(),
+        status: 'REQUESTED',
     };
 }
 
@@ -1332,6 +1529,145 @@ app.post('/api/dispatch/plan', async (req, res) => {
     }
 });
 
+app.post('/api/deliveries/request/preview', async (req, res) => {
+    try {
+        const prompt = String(req.body?.prompt || '').trim();
+        if (!prompt) {
+            return res.status(400).json({ error: 'Request details are required.' });
+        }
+
+        const requestedBy = String(req.body?.requestedBy || req.body?.clinic || 'Clinic operator').trim();
+        const requestedByEmail = String(req.body?.requestedByEmail || '').trim();
+        const clinicName = String(req.body?.clinic || 'Clinic').trim();
+        const defaultDestination = String(req.body?.destination || 'Chisasibi').trim();
+        const { stations, lines, drones, weather, weatherByStation } = await getRoutingContext();
+
+        let interpreted;
+        try {
+            const geminiResult = await callGeminiJson(
+                buildSupplyRequestPreviewPrompt({
+                    prompt,
+                    clinicName,
+                    requestedBy,
+                    defaultDestination,
+                    stations,
+                    weatherStations: weather.stations,
+                }),
+                GEMINI_REQUEST_PREVIEW_SCHEMA,
+                {
+                    maxOutputTokens: 500,
+                    thinkingLevel: 'minimal',
+                }
+            );
+            interpreted = {
+                ...geminiResult.data,
+                model: geminiResult.model,
+            };
+        } catch (geminiError) {
+            console.warn('Gemini clinic intake fallback:', geminiError.message);
+            interpreted = buildFallbackSupplyRequestPreview({
+                prompt,
+                clinicName,
+                defaultDestination,
+            });
+        }
+
+        const normalizedPreview = normalizeSupplyRequestPreview(interpreted, {
+            prompt,
+            requestedBy,
+            requestedByEmail,
+            clinicName,
+            defaultDestination,
+        });
+        const validStationIds = new Set(stations.map((station) => station.id));
+        if (!validStationIds.has(normalizedPreview.destination)) {
+            normalizedPreview.destination = defaultDestination;
+        }
+        if (!validStationIds.has(normalizedPreview.origin)) {
+            normalizedPreview.origin = 'Chibougamau Hub';
+        }
+
+        const planned = planDeliveryOperation({
+            deliveryInput: normalizedPreview,
+            stations,
+            lines,
+            drones,
+            weatherByStation,
+            mode: 'automatic',
+        });
+        const preview = buildDeliveryPayload({
+            ...normalizedPreview,
+            ...planned,
+            status: 'REQUESTED',
+            eta: generateETA(planned.estimatedMinutes),
+        });
+
+        res.json({
+            ...preview,
+            model: interpreted.model || 'fallback-clinic-intake',
+        });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+app.post('/api/deliveries/request', async (req, res) => {
+    try {
+        const prompt = String(req.body?.sourceText || req.body?.prompt || req.body?.payload || '').trim();
+        const requestedBy = String(req.body?.requestedBy || req.body?.clinic || 'Clinic operator').trim();
+        const requestedByEmail = String(req.body?.requestedByEmail || '').trim();
+        const clinicName = String(req.body?.clinic || 'Clinic').trim();
+        const defaultDestination = String(req.body?.destination || 'Chisasibi').trim();
+        const { stations, lines, drones, weatherByStation } = await getRoutingContext();
+
+        const validStationIds = new Set(stations.map((station) => station.id));
+        const normalizedRequest = normalizeSupplyRequestPreview({
+            ...req.body,
+            summary: req.body?.geminiSummary || req.body?.summary,
+        }, {
+            prompt,
+            requestedBy,
+            requestedByEmail,
+            clinicName,
+            defaultDestination,
+        });
+
+        if (!normalizedRequest.payload) {
+            return res.status(400).json({ error: 'A request payload is required.' });
+        }
+        if (!validStationIds.has(normalizedRequest.destination)) {
+            normalizedRequest.destination = defaultDestination;
+        }
+        if (!validStationIds.has(normalizedRequest.origin)) {
+            normalizedRequest.origin = 'Chibougamau Hub';
+        }
+
+        const planned = planDeliveryOperation({
+            deliveryInput: normalizedRequest,
+            stations,
+            lines,
+            drones,
+            weatherByStation,
+            mode: 'automatic',
+        });
+
+        const delivery = new Delivery({
+            ...buildDeliveryPayload({
+                ...normalizedRequest,
+                ...planned,
+                status: 'REQUESTED',
+                eta: generateETA(planned.estimatedMinutes),
+            }),
+            id: await generateUniqueId(Delivery, 'RLY'),
+        });
+
+        await delivery.save();
+        res.status(201).json(serializeDoc(delivery));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
 app.post('/api/deliveries', async (req, res) => {
     try {
         const { stations, lines, drones, weather, weatherByStation } = await getRoutingContext();
@@ -1457,6 +1793,51 @@ app.patch('/api/deliveries/:id/status', async (req, res) => {
     }
 });
 
+app.patch('/api/deliveries/:id/cancel', async (req, res) => {
+    try {
+        const delivery = await Delivery.findOne({ id: req.params.id });
+        if (!delivery) {
+            return res.status(404).json({ error: 'Delivery not found.' });
+        }
+        if (['DELIVERED', 'REJECTED', 'CANCELLED'].includes(delivery.status)) {
+            return res.status(400).json({ error: `Cannot cancel delivery with status ${delivery.status}.` });
+        }
+
+        const assignedDroneId = delivery.assignedDrone || null;
+        const assignedDrone = assignedDroneId
+            ? await Drone.findOne({ id: assignedDroneId })
+            : await Drone.findOne({ assignment: delivery.id });
+
+        delivery.status = 'CANCELLED';
+        delivery.manualAttentionRequired = false;
+        delivery.events = [
+            ...(delivery.events || []),
+            {
+                type: 'MISSION_CANCELLED',
+                title: 'Mission cancelled',
+                detail: `Delivery ${delivery.id} was cancelled before completion.`,
+                timestamp: new Date(),
+                stationId: delivery.lastStation || delivery.origin || null,
+            },
+        ];
+        await delivery.save();
+
+        if (assignedDrone) {
+            assignedDrone.status = 'ready';
+            assignedDrone.assignment = null;
+            assignedDrone.target_location = null;
+            assignedDrone.origin_location = null;
+            assignedDrone.speed = 0;
+            assignedDrone.location = delivery.lastStation || delivery.origin || assignedDrone.location;
+            await assignedDrone.save();
+        }
+
+        res.json(serializeDoc(delivery));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
 // ── Launch a delivery (assign drone, start simulation) ──
 app.post('/api/deliveries/:id/launch', async (req, res) => {
     try {
@@ -1473,6 +1854,7 @@ app.post('/api/deliveries/:id/launch', async (req, res) => {
         // Update delivery
         delivery.status = 'IN_TRANSIT';
         delivery.currentLeg = 1;
+        delivery.assignedDrone = availableDrone.id;
         if (delivery.route && delivery.route.length > 1) {
             delivery.lastStation = delivery.route[0];
         }

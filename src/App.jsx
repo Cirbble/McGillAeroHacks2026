@@ -51,19 +51,19 @@ function App() {
 
                 <Route path="/admin/*" element={
                     user?.role === 'admin' ?
-                        <Layout user={user} setUser={setUser}><AdminDashboard /></Layout>
+                        <Layout user={user} setUser={setUser}><AdminDashboard user={user} /></Layout>
                         : <Navigate to="/" replace />
                 } />
 
                 <Route path="/distributor/*" element={
                     user?.role === 'distributor' ?
-                        <Layout user={user} setUser={setUser}><DistributorPortal /></Layout>
+                        <Layout user={user} setUser={setUser}><DistributorPortal user={user} /></Layout>
                         : <Navigate to="/" replace />
                 } />
 
                 <Route path="/receiver/*" element={
                     user?.role === 'receiver' ?
-                        <Layout user={user} setUser={setUser}><ReceiverPortal /></Layout>
+                        <Layout user={user} setUser={setUser}><ReceiverPortal user={user} /></Layout>
                         : <Navigate to="/" replace />
                 } />
 

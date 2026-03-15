@@ -20,9 +20,14 @@ export default function Layout({ user, setUser, children }) {
 
     // Notification counts
     const pendingRequests = deliveries.filter(d => ['REQUESTED', 'AWAITING_REVIEW'].includes(d.status)).length;
-    const activeDeliveries = deliveries.filter(d => ['IN_TRANSIT', 'HANDOFF', 'READY_TO_LAUNCH', 'REROUTED', 'PENDING_DISPATCH'].includes(d.status)).length;
-    // Clinic badge: only count requests made BY the clinic (requestedBy is set), not all active deliveries
-    const clinicRequestCount = deliveries.filter(d => d.requestedBy && !['DELIVERED', 'REJECTED'].includes(d.status)).length;
+    const activeDeliveries = deliveries.filter(d => ['IN_TRANSIT', 'HANDOFF', 'READY_TO_LAUNCH', 'REROUTED', 'PENDING_DISPATCH', 'WEATHER_HOLD'].includes(d.status)).length;
+    const clinicRequestCount = deliveries.filter((delivery) => (
+        !['DELIVERED', 'REJECTED', 'CANCELLED'].includes(delivery.status)
+        && (
+            delivery.requestedByEmail === user.email
+            || (user.stationId && delivery.destination === user.stationId)
+        )
+    )).length;
 
     const navConfig = {
         admin: [
@@ -43,7 +48,8 @@ export default function Layout({ user, setUser, children }) {
         receiver: [
             { name: 'Dashboard', hash: '', icon: LayoutDashboard },
             { name: 'Request Supplies', hash: '#request', icon: PlusCircle },
-            { name: 'My Requests', hash: '#tracking', icon: ClipboardList, badge: clinicRequestCount },
+            { name: 'Current Requests', hash: '#requests', icon: ClipboardList, badge: clinicRequestCount },
+            { name: 'History', hash: '#history', icon: Clock },
             { name: 'Inventory', hash: '#inventory', icon: Package },
         ],
     };

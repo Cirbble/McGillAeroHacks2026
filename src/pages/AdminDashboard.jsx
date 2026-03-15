@@ -2,6 +2,7 @@ import { useLocation } from 'react-router-dom';
 import { useStore } from '../store';
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertTriangle, Database, Camera, Maximize2, Signal, Thermometer, Battery, Gauge, MessageSquare, Send, Loader2, RefreshCcw, BrainCircuit, Route } from 'lucide-react';
+import CorridorMapShared from '../components/CorridorMap';
 
 // Main south-to-north delivery corridor. Stations not listed here still appear
 // as map markers but are not connected by the corridor polyline.
@@ -394,6 +395,7 @@ function getActiveDronePosition(drone, stations) {
 
 function getStatusPresentation(delivery) {
     const mapping = {
+        REQUESTED: { label: 'Requested', badge: 'badge-amber' },
         AWAITING_REVIEW: { label: 'Awaiting Review', badge: 'badge-neutral' },
         READY_TO_LAUNCH: { label: 'Ready to Launch', badge: 'badge-blue' },
         IN_TRANSIT: { label: 'In Flight', badge: 'badge-green' },
@@ -401,6 +403,7 @@ function getStatusPresentation(delivery) {
         WEATHER_HOLD: { label: 'Weather Hold', badge: 'badge-red' },
         REROUTED: { label: 'Rerouted', badge: 'badge-yellow' },
         REJECTED: { label: 'Rejected', badge: 'badge-red' },
+        CANCELLED: { label: 'Cancelled', badge: 'badge-neutral' },
         DELIVERED: { label: 'Delivered', badge: 'badge-green' },
         PENDING_DISPATCH: { label: 'Pending Dispatch', badge: 'badge-neutral' },
     };
@@ -681,7 +684,7 @@ function DashboardMap({ stations = [], drones = [], lines = [], showWeatherOverl
             if (showWeatherOverlay) {
                 const radarPane = map.createPane('radarPane');
                 radarPane.style.zIndex = 340;
-                L.tileLayer.wms(RADAR_WMS_URL, {
+                L.tileLayer.wms(GEOMET_WMS_URL, {
                     pane: 'radarPane',
                     layers: RADAR_WMS_LAYER,
                     styles: RADAR_WMS_STYLE,
@@ -796,6 +799,10 @@ function OverviewWeatherMap({
     const weatherLayerModeRef = useRef(null);
     const legendControlRef = useRef(null);
     const resizeHandleRef = useRef(null);
+    const autoFramingRef = useRef(false);
+    const userMovedRef = useRef(false);
+    const hasAutoFramedRef = useRef(false);
+    const lastFocusKeyRef = useRef('');
 
     useEffect(() => {
         let resizeObserver = null;
@@ -822,6 +829,18 @@ function OverviewWeatherMap({
 
             overlayGroupRef.current = L.layerGroup().addTo(map);
             mapInstance.current = map;
+
+            const markUserMove = () => {
+                if (!autoFramingRef.current && hasAutoFramedRef.current) {
+                    userMovedRef.current = true;
+                }
+            };
+
+            map.on('dragstart', markUserMove);
+            map.on('zoomstart', markUserMove);
+            map.on('moveend', () => {
+                autoFramingRef.current = false;
+            });
 
             if (typeof ResizeObserver !== 'undefined') {
                 resizeObserver = new ResizeObserver(() => {
@@ -854,6 +873,10 @@ function OverviewWeatherMap({
             leafletRef.current = null;
             weatherLayerRef.current = null;
             weatherLayerModeRef.current = null;
+            autoFramingRef.current = false;
+            userMovedRef.current = false;
+            hasAutoFramedRef.current = false;
+            lastFocusKeyRef.current = '';
         };
     }, []);
 
@@ -906,16 +929,14 @@ function OverviewWeatherMap({
 
         const stationsById = Object.fromEntries(stations.map((station) => [station.id, station]));
         const weatherByStation = Object.fromEntries(weatherStations.map((station) => [station.stationId, station]));
-        const activeDelivery = highlightedDelivery || deliveries.find((delivery) => !['DELIVERED', 'REJECTED'].includes(delivery.status));
+        const activeDelivery = highlightedDelivery || deliveries.find((delivery) => !['DELIVERED', 'REJECTED', 'CANCELLED'].includes(delivery.status));
         const routeCoords = buildRouteCoordinates(activeDelivery, stations);
         const routeStationIds = new Set(activeDelivery?.route || []);
         const activeDronePosition = getActiveDronePosition(
             drones.find((drone) => drone.status === 'on_route') || drones[0],
             stations,
         );
-        const visibleStations = showWeatherOverlay && routeStationIds.size > 0
-            ? stations.filter((station) => routeStationIds.has(station.id))
-            : stations;
+        const visibleStations = stations;
         const focusPoints = routeCoords.length > 0
             ? [...routeCoords]
             : stations.map((station) => [station.lat, station.lng]);
@@ -924,18 +945,20 @@ function OverviewWeatherMap({
             focusPoints.push([activeDronePosition.lat, activeDronePosition.lng]);
         }
 
-        if (!showWeatherOverlay) {
-            lines.forEach((line) => {
-                const coords = line.stations
-                    .map((id) => stationsById[id])
-                    .filter(Boolean)
-                    .map((station) => [station.lat, station.lng]);
+        lines.forEach((line) => {
+            const coords = line.stations
+                .map((id) => stationsById[id])
+                .filter(Boolean)
+                .map((station) => [station.lat, station.lng]);
 
-                if (coords.length > 1) {
-                    L.polyline(coords, { color: line.color, weight: 3, opacity: 0.75 }).addTo(overlayGroup);
-                }
-            });
-        }
+            if (coords.length > 1) {
+                L.polyline(coords, {
+                    color: line.color,
+                    weight: 3,
+                    opacity: showWeatherOverlay ? 0.42 : 0.75,
+                }).addTo(overlayGroup);
+            }
+        });
 
         if (routeCoords.length > 1) {
             if (showWeatherOverlay) {
@@ -958,33 +981,35 @@ function OverviewWeatherMap({
             const isActive = station.status === 'online';
             const weatherState = weatherByStation[station.id]?.condition || 'CLEAR';
             const severityColor = getWeatherTone(weatherState);
-            const size = showWeatherOverlay
-                ? (routeStationIds.has(station.id) ? 14 : 10)
+            const routeStation = routeStationIds.has(station.id);
+            const highlightedWeather = showWeatherOverlay && routeStation && weatherState !== 'CLEAR';
+            const size = routeStation
+                ? (station.type === 'distribution' ? 16 : 13)
                 : station.type === 'distribution'
                     ? 16
                     : 12;
             const anchor = size / 2;
             const stationLines = lines.filter((line) => line.stations.includes(station.id));
-            const markerColor = routeStationIds.has(station.id) && (activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED')
+            const markerColor = routeStation && (activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED')
                 ? '#10b981'
                 : stationLines.length > 0
                     ? stationLines[0].color
                     : (isActive ? '#2563eb' : '#94a3b8');
             const icon = L.divIcon({
                 className: '',
-                html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${isActive ? markerColor : '#94a3b8'};border:3px solid white;box-shadow:${showWeatherOverlay ? `0 0 0 2px ${severityColor}` : '0 1px 4px rgba(0,0,0,0.2)'};"></div>`,
+                html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${isActive ? markerColor : '#94a3b8'};border:3px solid white;box-shadow:${highlightedWeather ? `0 0 0 2px ${severityColor}, 0 1px 4px rgba(0,0,0,0.2)` : '0 1px 4px rgba(0,0,0,0.2)'};"></div>`,
                 iconSize: [size, size],
                 iconAnchor: [anchor, anchor],
             });
             const lineNames = stationLines.map((line) => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${line.color};margin-right:3px;"></span>${line.name}`).join(' · ');
-            const weatherSummary = showWeatherOverlay && weatherState !== 'CLEAR'
+            const weatherSummary = highlightedWeather
                 ? `<br/><span style="color:${severityColor};font-size:10px;">${weatherState.toLowerCase()} weather on route</span>`
                 : '';
 
             L.marker([station.lat, station.lng], { icon })
                 .addTo(overlayGroup)
                 .bindTooltip(
-                    `<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${station.id}</strong><br/><span style="color:#64748b">${getStationLabel(station)}</span>${lineNames && !showWeatherOverlay ? `<br/><span style="color:#64748b;font-size:10px;">${lineNames}</span>` : ''}${weatherSummary}</div>`,
+                    `<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${station.id}</strong><br/><span style="color:#64748b">${getStationLabel(station)}</span>${lineNames ? `<br/><span style="color:#64748b;font-size:10px;">${lineNames}</span>` : ''}${weatherSummary}</div>`,
                     { direction: 'top', offset: [0, -10] },
                 );
         });
@@ -1035,13 +1060,21 @@ function OverviewWeatherMap({
             if (mapInstance.current !== map || !map.getContainer()) return;
 
             map.invalidateSize(false);
+            const focusKey = activeDelivery?.id || `network-${stations.length}`;
+            const shouldAutoFrame = !hasAutoFramedRef.current
+                || (!userMovedRef.current && lastFocusKeyRef.current !== focusKey);
 
-            if (focusPoints.length > 1 && focusBounds.isValid()) {
-                map.fitBounds(focusBounds.pad(routeCoords.length > 1 ? 0.28 : 0.16), {
-                    animate: false,
-                });
-            } else if (focusPoints.length === 1) {
-                map.setView(focusPoints[0], 7, { animate: false });
+            if (shouldAutoFrame) {
+                autoFramingRef.current = true;
+                if (focusPoints.length > 1 && focusBounds.isValid()) {
+                    map.fitBounds(focusBounds.pad(routeCoords.length > 1 ? 0.28 : 0.16), {
+                        animate: false,
+                    });
+                } else if (focusPoints.length === 1) {
+                    map.setView(focusPoints[0], 7, { animate: false });
+                }
+                hasAutoFramedRef.current = true;
+                lastFocusKeyRef.current = focusKey;
             }
         }, 80);
     }, [
@@ -1153,7 +1186,7 @@ export default function AdminDashboard() {
     const weatherStations = opsOverview?.weather?.stations || [];
     const displayDrones = drones.map((drone) => hydrateDroneForDisplay(drone, orderedStations, lines, weatherStations));
     const activeDrone = displayDrones.find((drone) => drone.status === 'on_route') || displayDrones[0] || null;
-    const active = deliveries.filter((delivery) => !['DELIVERED', 'REJECTED'].includes(delivery.status));
+    const active = deliveries.filter((delivery) => !['DELIVERED', 'REJECTED', 'CANCELLED'].includes(delivery.status));
     const selectedDrone = displayDrones.find((drone) => drone.id === selectedDroneId) || displayDrones[0] || null;
     const activeDelivery = deliveries.find((delivery) => delivery.id === selectedDeliveryId)
         || active[0]
@@ -2714,11 +2747,18 @@ export default function AdminDashboard() {
                 <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
                     {/* Map */}
                     <div className="card" style={{ flex: 1, padding: 0, overflow: 'hidden', minWidth: 0 }}>
-                        <DashboardMap
+                        <CorridorMapShared
                             stations={orderedStations}
                             drones={visibleDrones}
+                            deliveries={[]}
                             lines={visibleLines}
-                            showWeatherOverlay={dashboardWeather}
+                            showLines
+                            weatherOverlay={dashboardWeather ? {
+                                url: GEOMET_WMS_URL,
+                                layers: RADAR_WMS_LAYER,
+                                styles: RADAR_WMS_STYLE,
+                                opacity: 0.58,
+                            } : null}
                             height={600}
                         />
                     </div>

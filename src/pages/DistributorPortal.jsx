@@ -1,17 +1,179 @@
-﻿import { useState, useEffect } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useStore } from '../store';
 import { dispatchWithGemini } from '../services/gemini';
 import { speakText, generateDispatchConfirmation } from '../services/elevenlabs';
 import CorridorMapShared from '../components/CorridorMap';
-import { Send, Link as LinkIcon, Lock, CheckCircle2, Loader2, Volume2, Route, X, Clock, Package, MapPin, Radio, Camera, Battery, Gauge } from 'lucide-react';
+import {
+    AlertTriangle,
+    Battery,
+    Camera,
+    CheckCircle2,
+    ExternalLink,
+    Gauge,
+    Link as LinkIcon,
+    Loader2,
+    Lock,
+    MapPin,
+    Package,
+    Radio,
+    Route,
+    Send,
+    X,
+} from 'lucide-react';
+
+const ACTIVE_STATUSES = ['PENDING_DISPATCH', 'READY_TO_LAUNCH', 'IN_TRANSIT', 'HANDOFF', 'WEATHER_HOLD', 'REROUTED'];
+
+function statusBadge(status) {
+    return {
+        REQUESTED: 'badge-amber',
+        AWAITING_REVIEW: 'badge-amber',
+        PENDING_DISPATCH: 'badge-neutral',
+        READY_TO_LAUNCH: 'badge-neutral',
+        IN_TRANSIT: 'badge-blue',
+        HANDOFF: 'badge-blue',
+        WEATHER_HOLD: 'badge-red',
+        REROUTED: 'badge-blue',
+        DELIVERED: 'badge-green',
+        REJECTED: 'badge-red',
+        CANCELLED: 'badge-neutral',
+    }[status] || 'badge-neutral';
+}
+
+function priorityBadge(priority) {
+    return priority === 'Emergency' ? 'badge-red' : priority === 'Urgent' ? 'badge-amber' : 'badge-neutral';
+}
+
+function droneStatusBadge(status) {
+    if (status === 'ready') return 'badge-green';
+    if (status === 'on_route' || status === 'relocating') return 'badge-blue';
+    if (status === 'charging') return 'badge-amber';
+    return 'badge-neutral';
+}
+
+function toValidDate(value) {
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+function toTimestamp(value, fallback = 0) {
+    const parsed = toValidDate(value);
+    return parsed ? parsed.getTime() : fallback;
+}
+
+function formatDateTime(value, fallback = 'Pending sync') {
+    const parsed = toValidDate(value);
+    return parsed ? parsed.toLocaleString() : fallback;
+}
+
+function severityColor(score) {
+    const numericScore = Number(score || 0);
+    if (numericScore >= 5) return '#dc2626';
+    if (numericScore >= 4) return '#ea580c';
+    if (numericScore >= 3) return '#f59e0b';
+    return '#2563eb';
+}
+
+function droneDestinationLabel(drone) {
+    if (drone.target_location) return drone.target_location;
+    if (drone.status === 'ready') return 'Standby';
+    if (drone.status === 'charging') return 'Charging';
+    return drone.location || '-';
+}
+
+function droneStatusLabel(status) {
+    return {
+        ready: 'Ready',
+        on_route: 'On route',
+        relocating: 'Relocating',
+        charging: 'Charging',
+    }[status] || status;
+}
+
+function formatSolanaSignature(signature) {
+    if (!signature) return 'Pending';
+    if (signature.length <= 18) return signature;
+    return `${signature.slice(0, 8)}...${signature.slice(-8)}`;
+}
+
+function RouteStops({ route = [], currentLeg = 0 }) {
+    if (!Array.isArray(route) || route.length === 0) return null;
+
+    const activeStopIndex = Math.min(
+        Math.max(Number(currentLeg) || 0, 0),
+        Math.max(route.length - 1, 0)
+    );
+
+    return (
+        <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            {route.map((stop, index) => (
+                <Fragment key={`${stop}-${index}`}>
+                    <span
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            padding: '6px 10px',
+                            borderRadius: 999,
+                            border: '1px solid var(--border)',
+                            background: index < activeStopIndex
+                                ? 'rgba(37,99,235,0.10)'
+                                : index === activeStopIndex
+                                    ? 'rgba(37,99,235,0.16)'
+                                    : 'var(--bg)',
+                            color: index <= activeStopIndex ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            fontSize: 11,
+                            lineHeight: 1.2,
+                            fontWeight: index === activeStopIndex ? 700 : 500,
+                        }}
+                    >
+                        <span
+                            aria-hidden
+                            style={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: '50%',
+                                background: index < activeStopIndex
+                                    ? '#2563eb'
+                                    : index === activeStopIndex
+                                        ? '#1d4ed8'
+                                        : 'var(--border)',
+                                flexShrink: 0,
+                            }}
+                        />
+                        {stop}
+                    </span>
+                    {index < route.length - 1 && (
+                        <span
+                            aria-hidden
+                            style={{
+                                width: 10,
+                                height: 1,
+                                background: 'var(--border)',
+                                flexShrink: 0,
+                            }}
+                        />
+                    )}
+                </Fragment>
+            ))}
+        </div>
+    );
+}
 
 export default function DistributorPortal() {
-    const { deliveries, stations, drones, lines, addDelivery } = useStore();
+    const {
+        deliveries,
+        stations,
+        drones,
+        lines,
+        addDelivery,
+        approveDelivery,
+        cancelDelivery,
+    } = useStore();
     const location = useLocation();
     const hash = location.hash || '';
 
-    // Auto-refresh data every 10s for live updates
     useEffect(() => {
         const interval = setInterval(() => useStore.getState().initializeData(true), 10000);
         return () => clearInterval(interval);
@@ -19,115 +181,114 @@ export default function DistributorPortal() {
 
     const [useAI, setUseAI] = useState(true);
     const [aiPrompt, setAiPrompt] = useState('');
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [geminiResult, setGeminiResult] = useState(null);
-    const [error, setError] = useState(null);
-    const [isSpeaking, setIsSpeaking] = useState(false);
     const [payload, setPayload] = useState('');
-    const [confirmAction, setConfirmAction] = useState(null);
+    const [priority, setPriority] = useState('Routine');
+    const [origin, setOrigin] = useState('Chibougamau Hub');
+    const [destination, setDestination] = useState('Chisasibi');
     const [selectedDroneId, setSelectedDroneId] = useState(null);
     const [showAllDrones, setShowAllDrones] = useState(true);
+    const [confirmAction, setConfirmAction] = useState(null);
+    const [error, setError] = useState(null);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [isSpeaking, setIsSpeaking] = useState(false);
+    const [resultCard, setResultCard] = useState(null);
+
+    const requests = deliveries.filter((delivery) => ['REQUESTED', 'AWAITING_REVIEW'].includes(delivery.status)).sort((a, b) => (b.severityScore || 0) - (a.severityScore || 0));
+    const activeDeliveries = deliveries.filter((delivery) => ACTIVE_STATUSES.includes(delivery.status)).sort((a, b) => toTimestamp(a.eta, Number.POSITIVE_INFINITY) - toTimestamp(b.eta, Number.POSITIVE_INFINITY));
+    const completedDeliveries = deliveries.filter((delivery) => delivery.status === 'DELIVERED').sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt));
+    const history = [...deliveries].sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt));
+    const selectedDrone = drones.find((drone) => drone.id === selectedDroneId) || null;
     const distributionStations = stations.filter((station) => station.type === 'distribution');
-    const destinationStations = stations.filter((station) => station.id !== 'Chibougamau Hub');
-    const [origin, setOrigin] = useState(distributionStations[0]?.id || 'Chibougamau Hub');
-    const [destination, setDestination] = useState('Chisasibi');
-    const [priority, setPriority] = useState('Routine');
+    const destinationStations = stations.filter((station) => station.type !== 'distribution');
+    const myDispatchDroneIds = new Set(activeDeliveries.map((delivery) => delivery.assignedDrone).filter(Boolean));
+    const mapDrones = showAllDrones ? drones : drones.filter((drone) => myDispatchDroneIds.has(drone.id) || myDispatchDroneIds.has(drone.assignment));
 
-    // Status helpers
-    const isRequested = (s) => ['REQUESTED', 'AWAITING_REVIEW'].includes(s);
-    const isActive = (s) => ['PENDING_DISPATCH', 'READY_TO_LAUNCH', 'IN_TRANSIT', 'REROUTED', 'HANDOFF'].includes(s);
-    const isFinished = (s) => ['DELIVERED', 'REJECTED'].includes(s);
-
-    const requests = deliveries.filter(d => isRequested(d.status)).sort((a, b) => (b.severityScore || 0) - (a.severityScore || 0));
-    const activeDeliveries = deliveries.filter(d => isActive(d.status)).sort((a, b) => new Date(a.eta) - new Date(b.eta));
-    const allApproved = deliveries.filter(d => !isRequested(d.status) && d.status !== 'REJECTED').sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    const completed = deliveries.filter(d => d.status === 'DELIVERED').sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    const allHistory = deliveries.filter(d => isFinished(d.status)).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    const selectedDrone = drones.find(d => d.id === selectedDroneId);
-
-    const severityColor = (s) => {
-        if (s >= 5) return '#dc2626'; if (s >= 4) return '#ea580c';
-        if (s >= 3) return '#d97706'; if (s >= 2) return '#2563eb'; return '#64748b';
-    };
-    const statusBadge = (status) => {
-        const map = { 'REQUESTED': 'badge-amber', 'AWAITING_REVIEW': 'badge-amber', 'PENDING_DISPATCH': 'badge-neutral', 'READY_TO_LAUNCH': 'badge-neutral', 'IN_TRANSIT': 'badge-blue', 'REROUTED': 'badge-blue', 'HANDOFF': 'badge-blue', 'DELIVERED': 'badge-green', 'REJECTED': 'badge-red' };
-        return map[status] || 'badge-neutral';
-    };
-
-    const handleAIDispatch = async (e) => {
-        e.preventDefault(); if (!aiPrompt) return;
-        setError(null); setIsProcessing(true); setGeminiResult(null);
+    const runAction = async () => {
+        if (!confirmAction) return;
         try {
-            const result = await dispatchWithGemini(aiPrompt);
-            setGeminiResult(result); await addDelivery(result);
-            try { setIsSpeaking(true); await speakText(generateDispatchConfirmation(result), 'en'); } catch { } finally { setIsSpeaking(false); }
+            if (confirmAction.type === 'approve' || confirmAction.type === 'reject') {
+                await approveDelivery(confirmAction.id, confirmAction.type);
+            } else {
+                await cancelDelivery(confirmAction.id);
+            }
+            setConfirmAction(null);
+        } catch (err) {
+            alert(`Error: ${err.message}`);
+        }
+    };
+
+    const submitAIDispatch = async (event) => {
+        event.preventDefault();
+        if (!aiPrompt.trim()) return;
+        setError(null);
+        setIsProcessing(true);
+        try {
+            const planned = await dispatchWithGemini(aiPrompt);
+            const created = await addDelivery(planned);
+            setResultCard(created);
             setAiPrompt('');
-        } catch (err) { setError(err.message); } finally { setIsProcessing(false); }
-    };
-    const handleManualDispatch = async (e) => {
-        e.preventDefault(); if (!payload) return; setError(null);
-        try { await addDelivery({ payload, origin, destination, priority }); setPayload(''); } catch (err) { setError(err.message); }
-    };
-    const handleLaunch = async (id) => {
-        try {
-            const res = await fetch(`/api/deliveries/${id}/launch`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || 'Launch failed');
-            alert(`🚀 ${data.message}`);
-            useStore.getState().initializeData(true);
-        } catch (err) { alert('Launch error: ' + err.message); }
-    };
-    const handleAction = async (id, action) => {
-        try {
-            const res = await fetch(`/api/deliveries/${id}/approve`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) });
-            if (!res.ok) throw new Error('Failed to ' + action);
-            setConfirmAction(null); useStore.getState().initializeData(true);
-        } catch (err) { alert('Error: ' + err.message); }
+            try {
+                setIsSpeaking(true);
+                await speakText(generateDispatchConfirmation(created), 'en');
+            } catch {
+                // Optional audio.
+            } finally {
+                setIsSpeaking(false);
+            }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setIsProcessing(false);
+        }
     };
 
-    /* ── Confirmation Modal ── */
+    const submitManualDispatch = async (event) => {
+        event.preventDefault();
+        if (!payload.trim()) return;
+        setError(null);
+        try {
+            const created = await addDelivery({ payload: payload.trim(), origin, destination, priority });
+            setResultCard(created);
+            setPayload('');
+        } catch (err) {
+            setError(err.message);
+        }
+    };
+
     const ConfirmModal = () => {
         if (!confirmAction) return null;
+        const copy = confirmAction.type === 'approve'
+            ? ['Approve delivery request?', 'Approval moves this clinic request into the dispatch queue for launch readiness and fleet assignment.', 'Approve Request']
+            : confirmAction.type === 'reject'
+                ? ['Reject request?', 'This closes the clinic request before dispatch.', 'Reject Request']
+                : ['Cancel active delivery?', 'This stops the mission and frees the assigned drone.', 'Cancel Delivery'];
+        const destructive = confirmAction.type !== 'approve';
         return (
             <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setConfirmAction(null)}>
-                <div style={{ background: 'white', borderRadius: 12, padding: 28, maxWidth: 400, width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.15)' }} onClick={e => e.stopPropagation()}>
-                    <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{confirmAction.action === 'approve' ? 'Γ£ô Approve Delivery?' : 'Γ£ò Reject Request?'}</div>
-                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
-                        {confirmAction.action === 'approve' ? `Move ${confirmAction.id} to dispatch queue.` : `Reject ${confirmAction.id}. The clinic will be notified.`}
-                    </div>
-                    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                        <button className="btn btn-secondary" onClick={() => setConfirmAction(null)}>Cancel</button>
-                        <button className={`btn ${confirmAction.action === 'approve' ? 'btn-primary' : ''}`}
-                            style={confirmAction.action === 'reject' ? { background: '#ef4444', color: 'white', border: 'none' } : {}}
-                            onClick={() => handleAction(confirmAction.id, confirmAction.action)}>
-                            {confirmAction.action === 'approve' ? 'Γ£ô Approve' : 'Γ£ò Reject'}
-                        </button>
+                <div className="card" style={{ width: 420, padding: 24 }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{copy[0]}</div>
+                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 18 }}>{copy[1]}</div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                        <button className="btn btn-secondary" onClick={() => setConfirmAction(null)}>Keep Current State</button>
+                        <button className={destructive ? 'btn' : 'btn btn-primary'} style={destructive ? { background: '#ef4444', color: 'white', border: 'none' } : undefined} onClick={runAction}>{copy[2]}</button>
                     </div>
                 </div>
             </div>
         );
     };
 
-    /* ── Overview with Map + Drone Panel ── */
     if (hash === '') {
         return (
             <div>
                 <ConfirmModal />
-                <div className="page-header">
-                    <h1>Operator Overview</h1>
-                    <p>Live drone positions and corridor activity.</p>
-                </div>
-
+                <div className="page-header"><h1>Operator Overview</h1><p>Live fleet activity, route telemetry, and dispatch workload across the corridor.</p></div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
-                    <div className="stat-card"><div className="stat-label">PENDING REQUESTS</div><div className="stat-value" style={{ color: requests.length > 0 ? '#ea580c' : 'inherit' }}>{requests.length}</div></div>
+                    <div className="stat-card"><div className="stat-label">PENDING REQUESTS</div><div className="stat-value" style={{ color: requests.length ? '#ea580c' : 'inherit' }}>{requests.length}</div></div>
                     <div className="stat-card"><div className="stat-label">ACTIVE DELIVERIES</div><div className="stat-value">{activeDeliveries.length}</div></div>
-                    <div className="stat-card"><div className="stat-label">COMPLETED</div><div className="stat-value">{completed.length}</div></div>
-                    <div className="stat-card"><div className="stat-label">FLEET ONLINE</div><div className="stat-value">{drones.filter(d => d.status !== 'maintenance').length}/{drones.length}</div></div>
+                    <div className="stat-card"><div className="stat-label">COMPLETED</div><div className="stat-value">{completedDeliveries.length}</div></div>
+                    <div className="stat-card"><div className="stat-label">FLEET ONLINE</div><div className="stat-value">{drones.filter((drone) => drone.status !== 'charging').length}/{drones.length}</div></div>
                 </div>
-
                 <div style={{ display: 'grid', gridTemplateColumns: selectedDrone ? '1fr 320px' : '1fr', gap: 16 }}>
-                    {/* Map */}
                     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                         <div className="card-header" style={{ borderBottom: '1px solid var(--border)' }}>
                             <span className="card-header-title"><MapPin size={14} /> Live Corridor Map</span>
@@ -136,80 +297,41 @@ export default function DistributorPortal() {
                                 <button className={`toggle-btn ${!showAllDrones ? 'active' : ''}`} onClick={() => setShowAllDrones(false)}>My Dispatches</button>
                             </div>
                         </div>
-                        <CorridorMapShared
-                            stations={stations}
-                            drones={showAllDrones ? drones : drones.filter(d => d.status === 'on_route')}
-                            deliveries={activeDeliveries}
-                            lines={lines}
-                            height={440}
-                            showLines={false}
-                            selectedDroneId={selectedDroneId}
-                            onDroneClick={(id) => setSelectedDroneId(id === selectedDroneId ? null : id)}
-                        />
+                        <CorridorMapShared stations={stations} drones={mapDrones} deliveries={activeDeliveries} lines={lines} height={440} showLines={false} selectedDroneId={selectedDroneId} onDroneClick={(id) => setSelectedDroneId(id === selectedDroneId ? null : id)} />
                     </div>
-
-                    {/* Drone side panel */}
                     {selectedDrone && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                                {/* Simulated feed */}
-                                <div style={{ position: 'relative', height: 180, background: '#0f172a', overflow: 'hidden' }}>
-                                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <div style={{ color: '#334155', fontSize: 11, fontFamily: 'var(--mono)', textAlign: 'center' }}>
-                                            <Camera size={24} style={{ opacity: 0.3, marginBottom: 6 }} /><br />
-                                            LIVE FEED — {selectedDrone.id}
-                                        </div>
+                                <div style={{ position: 'relative', height: 180, background: '#0f172a' }}>
+                                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#334155', fontSize: 11, fontFamily: 'var(--mono)', textAlign: 'center' }}>
+                                        <Camera size={24} style={{ opacity: 0.3, marginBottom: 6 }} /><br />LIVE FEED | {selectedDrone.id}
                                     </div>
-                                    <div style={{ position: 'absolute', top: 8, left: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                        <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', boxShadow: '0 0 6px rgba(239,68,68,0.6)', animation: 'pulse 1.5s infinite' }} />
-                                        <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: '#ef4444', fontWeight: 600 }}>REC</span>
-                                    </div>
-                                    <div style={{ position: 'absolute', top: 8, right: 10, fontFamily: 'var(--mono)', fontSize: 9, color: '#475569' }}>{selectedDrone.id}</div>
                                 </div>
-                                <div style={{ padding: 16 }}>
-                                    <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{selectedDrone.id}</div>
-                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                                        <div><Battery size={11} style={{ verticalAlign: 'middle' }} /> Battery: <strong>{selectedDrone.battery}%</strong></div>
-                                        <div><Gauge size={11} style={{ verticalAlign: 'middle' }} /> Speed: <strong>{selectedDrone.speed || 0} km/h</strong></div>
-                                        <div>Status: <span className={`badge ${selectedDrone.status === 'on_route' ? 'badge-blue' : 'badge-green'}`}>{selectedDrone.status}</span></div>
-                                        <div>Location: <strong>{selectedDrone.target_location || selectedDrone.location || '—'}</strong></div>
-                                    </div>
+                                <div style={{ padding: 16, fontSize: 12, color: 'var(--text-secondary)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                                    <div><Battery size={11} style={{ verticalAlign: 'middle' }} /> Battery: <strong>{selectedDrone.battery}%</strong></div>
+                                    <div><Gauge size={11} style={{ verticalAlign: 'middle' }} /> Speed: <strong>{selectedDrone.speed || 0} km/h</strong></div>
+                                    <div>Status: <span className={`badge ${droneStatusBadge(selectedDrone.status)}`}>{droneStatusLabel(selectedDrone.status)}</span></div>
+                                    <div>Heading To: <strong>{droneDestinationLabel(selectedDrone)}</strong></div>
                                 </div>
                             </div>
-                            <button className="btn btn-secondary" style={{ width: '100%', fontSize: 12 }} onClick={() => setSelectedDroneId(null)}>
-                                <X size={12} /> Close Panel
-                            </button>
+                            <button className="btn btn-secondary" onClick={() => setSelectedDroneId(null)}><X size={12} /> Close Panel</button>
                         </div>
                     )}
                 </div>
-
-                {/* Drone list below map */}
                 <div className="card" style={{ padding: 0, overflow: 'hidden', marginTop: 16 }}>
                     <div className="card-header"><span className="card-header-title"><Radio size={14} /> Fleet Status</span></div>
                     <table className="data-table">
-                        <thead><tr><th>Drone</th><th>Model</th><th>Location</th><th>Battery</th><th>Status</th><th></th></tr></thead>
+                        <thead><tr><th>Drone</th><th>Model</th><th>Heading To</th><th>Battery</th><th>Status</th></tr></thead>
                         <tbody>
-                            {drones.map(d => (
-                                <tr key={d.id} style={{ cursor: 'pointer', background: d.id === selectedDroneId ? 'var(--accent-light)' : undefined }}
-                                    onClick={() => setSelectedDroneId(d.id === selectedDroneId ? null : d.id)}>
-                                    <td className="mono bold">{d.id}</td>
-                                    <td className="muted">{d.model}</td>
-                                    <td>{d.target_location || d.location || '—'}</td>
-                                    <td>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <div style={{ width: 40, height: 4, background: 'var(--border)', borderRadius: 2 }}>
-                                                <div style={{ width: `${d.battery}%`, height: '100%', background: d.battery > 50 ? '#22c55e' : d.battery > 20 ? '#f59e0b' : '#ef4444', borderRadius: 2 }} />
-                                            </div>
-                                            <span className="mono" style={{ fontSize: 11 }}>{d.battery}%</span>
-                                        </div>
-                                    </td>
-                                    <td><span className={`badge ${d.status === 'on_route' ? 'badge-blue' : d.status === 'ready' ? 'badge-green' : 'badge-amber'}`}>{d.status}</span></td>
-                                    <td style={{ textAlign: 'right' }}>
-                                        <button className="btn btn-secondary" style={{ fontSize: 10, padding: '2px 8px' }}>View</button>
-                                    </td>
+                            {drones.map((drone) => (
+                                <tr key={drone.id} onClick={() => setSelectedDroneId(drone.id === selectedDroneId ? null : drone.id)} style={{ cursor: 'pointer', background: drone.id === selectedDroneId ? 'var(--accent-light)' : undefined }}>
+                                    <td className="mono bold">{drone.id}</td>
+                                    <td className="muted">{drone.model}</td>
+                                    <td>{droneDestinationLabel(drone)}</td>
+                                    <td className="mono">{drone.battery}%</td>
+                                    <td><span className={`badge ${droneStatusBadge(drone.status)}`}>{droneStatusLabel(drone.status)}</span></td>
                                 </tr>
                             ))}
-                            {drones.length === 0 && <tr><td colSpan={6} className="empty-row">No drones registered.</td></tr>}
                         </tbody>
                     </table>
                 </div>
@@ -217,40 +339,30 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ── Incoming Requests ── */
     if (hash === '#requests') {
         return (
             <div>
                 <ConfirmModal />
-                <div className="page-header"><h1>Incoming Requests</h1><p>Clinic supply requests awaiting approval. Sorted by severity.</p></div>
-                {requests.length === 0 ? (
-                    <div className="card" style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-tertiary)' }}>
-                        <CheckCircle2 size={32} style={{ marginBottom: 12, opacity: 0.3 }} /><div style={{ fontSize: 14, fontWeight: 600 }}>All clear</div><div style={{ fontSize: 13 }}>No pending requests.</div>
-                    </div>
-                ) : (
+                <div className="page-header"><h1>Incoming Requests</h1><p>Clinic supply requests awaiting review, sorted by severity.</p></div>
+                {requests.length === 0 ? <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}><CheckCircle2 size={32} style={{ marginBottom: 12, opacity: 0.3 }} /><div>No pending requests.</div></div> : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        {requests.map(r => (
-                            <div key={r.id} className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                                <div style={{ display: 'flex', gap: 16, padding: 20 }}>
-                                    <div style={{ width: 48, height: 48, borderRadius: 10, background: severityColor(r.severityScore), color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 700, flexShrink: 0 }}>{r.severityScore || '?'}</div>
-                                    <div style={{ flex: 1, minWidth: 0 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                                            <span className="mono bold" style={{ fontSize: 14 }}>{r.id}</span>
-                                            <span className={`badge ${r.priority === 'Emergency' ? 'badge-red' : r.priority === 'Urgent' ? 'badge-amber' : 'badge-neutral'}`}>{r.priority}</span>
-                                            <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>{new Date(r.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                        </div>
-                                        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>{r.payload}</div>
-                                        {r.geminiSummary && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 6, lineHeight: 1.5 }}>{r.geminiSummary}</div>}
-                                        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', display: 'flex', gap: 16 }}>
-                                            {r.requestedBy && <span><MapPin size={11} style={{ verticalAlign: 'middle' }} /> From: <strong>{r.requestedBy}</strong></span>}
-                                            <span>Route: {r.origin} → {r.destination}</span>
-                                        </div>
-                                        {r.clinicNotes && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>"{r.clinicNotes}"</div>}
+                        {requests.map((request) => (
+                            <div key={request.id} className="card" style={{ display: 'grid', gridTemplateColumns: '56px 1fr auto', gap: 16, alignItems: 'start' }}>
+                                <div style={{ width: 48, height: 48, borderRadius: 10, background: severityColor(request.severityScore), color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 700 }}>{request.severityScore || '?'}</div>
+                                <div>
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
+                                        <span className="mono bold">{request.id}</span>
+                                        <span className={`badge ${priorityBadge(request.priority)}`}>{request.priority}</span>
+                                        <span className={`badge ${statusBadge(request.status)}`}>{request.status.replace(/_/g, ' ')}</span>
                                     </div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
-                                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '8px 16px' }} onClick={() => setConfirmAction({ id: r.id, action: 'approve' })}>Γ£ô Approve</button>
-                                        <button className="btn btn-secondary" style={{ fontSize: 12, padding: '8px 16px' }} onClick={() => setConfirmAction({ id: r.id, action: 'reject' })}>Γ£ò Reject</button>
-                                    </div>
+                                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{request.payload}</div>
+                                    {request.geminiSummary && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 6 }}>{request.geminiSummary}</div>}
+                                    <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{request.requestedBy || request.clinic} | {request.origin} to {request.destination}</div>
+                                    {request.clinicNotes && <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)' }}>"{request.clinicNotes}"</div>}
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                    <button className="btn btn-primary" onClick={() => setConfirmAction({ id: request.id, type: 'approve' })}>Approve</button>
+                                    <button className="btn btn-secondary" onClick={() => setConfirmAction({ id: request.id, type: 'reject' })}>Reject</button>
                                 </div>
                             </div>
                         ))}
@@ -260,51 +372,63 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ── Active Deliveries ── */
     if (hash === '#active') {
         return (
             <div>
-                <div className="page-header"><h1>Active Deliveries</h1><p>Track in-progress deliveries across the corridor.</p></div>
-                {activeDeliveries.length === 0 ? (
-                    <div className="card" style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-tertiary)' }}>
-                        <Package size={32} style={{ marginBottom: 12, opacity: 0.3 }} /><div style={{ fontSize: 14, fontWeight: 600 }}>No active deliveries</div>
-                    </div>
-                ) : (
+                <ConfirmModal />
+                <div className="page-header"><h1>Active Deliveries</h1><p>Track live missions, queued launches, and weather holds across the corridor.</p></div>
+                {activeDeliveries.length === 0 ? <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text-tertiary)' }}><Package size={32} style={{ marginBottom: 12, opacity: 0.3 }} /><div>No active deliveries.</div></div> : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        {activeDeliveries.map(d => {
-                            const progress = d.totalLegs > 0 ? Math.round((d.currentLeg / d.totalLegs) * 100) : 0;
+                        {activeDeliveries.map((delivery) => {
+                            const progress = delivery.totalLegs > 0 ? Math.round((delivery.currentLeg / delivery.totalLegs) * 100) : 0;
+                            const nextStop = Array.isArray(delivery.route) && delivery.route.length > 0
+                                ? delivery.route[Math.min(delivery.currentLeg || 0, delivery.route.length - 1)]
+                                : delivery.destination;
+                            const statusDetail = delivery.status === 'PENDING_DISPATCH'
+                                ? 'Route review in progress'
+                                : delivery.status === 'READY_TO_LAUNCH'
+                                    ? 'Waiting for an available drone'
+                                    : delivery.status === 'WEATHER_HOLD'
+                                        ? 'Mission paused for corridor conditions'
+                                        : `Heading to ${nextStop || delivery.destination}`;
                             return (
-                                <div key={d.id} className="card" style={{ padding: 20 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                                        <span className="mono bold" style={{ fontSize: 15 }}>{d.id}</span>
-                                        <span className={`badge ${statusBadge(d.status)}`}>{d.status.replace(/_/g, ' ')}</span>
-                                        <span className={`badge ${d.priority === 'Emergency' ? 'badge-red' : d.priority === 'Urgent' ? 'badge-amber' : 'badge-neutral'}`}>{d.priority}</span>
-                                        {['READY_TO_LAUNCH', 'PENDING_DISPATCH'].includes(d.status) && (
-                                            <button className="btn btn-primary" style={{ marginLeft: 'auto', fontSize: 12, padding: '6px 16px' }} onClick={() => handleLaunch(d.id)}>🚀 Launch</button>
-                                        )}
-                                        {!['READY_TO_LAUNCH', 'PENDING_DISPATCH'].includes(d.status) && (
-                                            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-secondary)' }}>ETA: {new Date(d.eta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                        )}
+                                <div key={delivery.id} className="card" style={{ padding: 20 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                                        <span className="mono bold">{delivery.id}</span>
+                                        <span className={`badge ${statusBadge(delivery.status)}`}>{delivery.status.replace(/_/g, ' ')}</span>
+                                        <span className={`badge ${priorityBadge(delivery.priority)}`}>{delivery.priority}</span>
+                                        {delivery.assignedDrone && <span className="badge badge-neutral">Drone {delivery.assignedDrone}</span>}
+                                        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-secondary)' }}>{delivery.status === 'PENDING_DISPATCH' || delivery.status === 'READY_TO_LAUNCH' ? delivery.recommendedAction : `ETA ${delivery.estimatedTime || '-'}`}</span>
+                                        <button className="btn btn-secondary" style={{ color: '#ef4444' }} onClick={() => setConfirmAction({ id: delivery.id, type: 'cancel' })}><X size={12} /> Cancel</button>
                                     </div>
-                                    <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>{d.payload}</div>
-                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>{d.origin} → {d.destination} · Last seen: {d.lastStation}</div>
+                                    <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 17 }}>{delivery.payload}</div>
+                                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>{statusDetail}</div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 14 }}>
+                                        <div style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 4 }}>Origin</div>
+                                            <div style={{ fontSize: 13, fontWeight: 600 }}>{delivery.origin}</div>
+                                        </div>
+                                        <div style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 4 }}>Destination</div>
+                                            <div style={{ fontSize: 13, fontWeight: 600 }}>{delivery.destination}</div>
+                                        </div>
+                                        <div style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 4 }}>Last Relay</div>
+                                            <div style={{ fontSize: 13, fontWeight: 600 }}>{delivery.lastStation || delivery.origin}</div>
+                                        </div>
+                                        <div style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)', marginBottom: 4 }}>Progress</div>
+                                            <div style={{ fontSize: 13, fontWeight: 600 }}>{delivery.totalLegs > 0 ? `${delivery.currentLeg}/${delivery.totalLegs} legs` : 'Queued'}</div>
+                                        </div>
+                                    </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                        <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 3 }}>
-                                            <div style={{ width: `${progress}%`, height: '100%', background: d.priority === 'Emergency' ? '#ef4444' : 'var(--accent)', borderRadius: 3, transition: 'width 0.5s' }} />
+                                        <div style={{ flex: 1, height: 8, background: 'var(--border)', borderRadius: 999 }}>
+                                            <div style={{ width: `${progress}%`, height: '100%', background: delivery.priority === 'Emergency' ? '#ef4444' : 'var(--accent)', borderRadius: 999 }} />
                                         </div>
-                                        <span className="mono" style={{ fontSize: 12, fontWeight: 600, minWidth: 40, textAlign: 'right' }}>{progress}%</span>
+                                        <span className="mono" style={{ fontSize: 12, minWidth: 36, textAlign: 'right' }}>{progress}%</span>
                                     </div>
-                                    {d.route && d.route.length > 0 && (
-                                        <div style={{ marginTop: 10, display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-                                            {d.route.map((stop, i) => (
-                                                <span key={i} style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: i < d.currentLeg ? 'var(--accent)' : i === d.currentLeg ? '#f59e0b' : 'var(--border)', border: '2px solid white', boxShadow: '0 0 0 1px var(--border)' }} />
-                                                    <span style={{ fontWeight: i === d.currentLeg ? 700 : 400, color: i < d.currentLeg ? 'var(--accent)' : 'var(--text-secondary)' }}>{stop}</span>
-                                                    {i < d.route.length - 1 && <span style={{ color: 'var(--text-tertiary)', margin: '0 2px' }}>→</span>}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
+                                    <RouteStops route={delivery.route} currentLeg={delivery.currentLeg} />
+                                    {delivery.status === 'WEATHER_HOLD' && <div style={{ marginTop: 12, padding: '10px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 12, color: '#991b1b', display: 'flex', gap: 8 }}><AlertTriangle size={14} style={{ flexShrink: 0 }} /><span>{delivery.recommendedAction || 'Weather hold is active on this mission.'}</span></div>}
                                 </div>
                             );
                         })}
@@ -314,15 +438,14 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ── Dispatch Console ── */
     if (hash === '#dispatch') {
         return (
             <div>
-                <div className="page-header"><h1>Dispatch Console</h1><p>Create deliveries using Gemini AI routing or manual entry.</p></div>
-                <div style={{ display: 'grid', gridTemplateColumns: geminiResult ? '1fr 380px' : '1fr', gap: 16, maxWidth: geminiResult ? 1100 : 680, margin: '0 auto' }}>
+                <div className="page-header"><h1>Dispatch Console</h1><p>Create deliveries with AI assist or manual entry. New missions enter the operational queue after route planning and fleet checks.</p></div>
+                <div style={{ display: 'grid', gridTemplateColumns: resultCard ? '1fr 360px' : '1fr', gap: 16, maxWidth: resultCard ? 1080 : 680, margin: '0 auto' }}>
                     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                         <div className="card-header">
-                            <span className="card-header-title"><Send size={15} /> Manifest Request</span>
+                            <span className="card-header-title"><Send size={15} /> Dispatch Manifest</span>
                             <div className="toggle-group">
                                 <button className={`toggle-btn ${useAI ? 'active' : ''}`} onClick={() => setUseAI(true)}>AI Assist</button>
                                 <button className={`toggle-btn ${!useAI ? 'active' : ''}`} onClick={() => setUseAI(false)}>Manual</button>
@@ -330,42 +453,39 @@ export default function DistributorPortal() {
                         </div>
                         <div className="card-body">
                             {useAI ? (
-                                <form onSubmit={handleAIDispatch}>
-                                    <div style={{ marginBottom: 20 }}>
-                                        <textarea className="form-input" rows={5} placeholder="E.g., We need to send 2 boxes of urgent EpiPens from Chibougamau to Chisasibi immediately." value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} style={{ resize: 'none' }} />
-                                    </div>
+                                <form onSubmit={submitAIDispatch}>
+                                    <textarea className="form-input" rows={5} style={{ resize: 'none', marginBottom: 16 }} placeholder="Example: Send urgent insulin and antibiotics from Chibougamau Hub to Chisasibi tonight." value={aiPrompt} onChange={(event) => setAiPrompt(event.target.value)} />
                                     {error && <div className="info-box" style={{ marginBottom: 16, background: 'var(--danger-light)', borderColor: '#fca5a5', color: 'var(--danger)' }}>{error}</div>}
-                                    <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '12px' }} disabled={isProcessing || !aiPrompt}>
-                                        {isProcessing ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Processing with Gemini...</> : 'Generate Route & Queue Launch'}
-                                    </button>
+                                    <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={isProcessing || !aiPrompt.trim()}>{isProcessing ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Planning Dispatch...</> : 'Generate Route and Dispatch'}</button>
                                 </form>
                             ) : (
-                                <form onSubmit={handleManualDispatch}>
-                                    <div style={{ marginBottom: 16 }}><label className="form-label">Payload</label><input className="form-input" placeholder="e.g. Insulin (5kg)" value={payload} onChange={e => setPayload(e.target.value)} required /></div>
+                                <form onSubmit={submitManualDispatch}>
+                                    <label className="form-label">Payload</label>
+                                    <input className="form-input" style={{ marginBottom: 16 }} value={payload} onChange={(event) => setPayload(event.target.value)} placeholder="Example: Insulin (5kg)" required />
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-                                        <div><label className="form-label">Origin</label><select className="form-input" value={origin} onChange={e => setOrigin(e.target.value)}>{distributionStations.map(s => <option key={s.id} value={s.id}>{s.id}</option>)}</select></div>
-                                        <div><label className="form-label">Destination</label><select className="form-input" value={destination} onChange={e => setDestination(e.target.value)}>{destinationStations.map(s => <option key={s.id} value={s.id}>{s.id}</option>)}</select></div>
+                                        <div><label className="form-label">Origin</label><select className="form-input" value={origin} onChange={(event) => setOrigin(event.target.value)}>{distributionStations.map((station) => <option key={station.id} value={station.id}>{station.id}</option>)}</select></div>
+                                        <div><label className="form-label">Destination</label><select className="form-input" value={destination} onChange={(event) => setDestination(event.target.value)}>{destinationStations.map((station) => <option key={station.id} value={station.id}>{station.id}</option>)}</select></div>
                                     </div>
-                                    <div style={{ marginBottom: 16 }}><label className="form-label">Priority</label><select className="form-input" value={priority} onChange={e => setPriority(e.target.value)}><option value="Routine">Routine</option><option value="Urgent">Urgent</option><option value="Emergency">Emergency</option></select></div>
+                                    <label className="form-label">Priority</label>
+                                    <select className="form-input" style={{ marginBottom: 16 }} value={priority} onChange={(event) => setPriority(event.target.value)}><option value="Routine">Routine</option><option value="Urgent">Urgent</option><option value="Emergency">Emergency</option></select>
                                     {error && <div className="info-box" style={{ marginBottom: 16, background: 'var(--danger-light)', borderColor: '#fca5a5', color: 'var(--danger)' }}>{error}</div>}
-                                    <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '12px' }} disabled={!payload}>Queue Delivery</button>
+                                    <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={!payload.trim()}>Dispatch Delivery</button>
                                 </form>
                             )}
                         </div>
                     </div>
-                    {geminiResult && (
-                        <div className="card" style={{ padding: 20 }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 12, textTransform: 'uppercase' }}>AI Route Result</div>
-                            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{geminiResult.payload}</div>
-                            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>{geminiResult.origin} → {geminiResult.destination}</div>
-                            {geminiResult.route && geminiResult.route.map((stop, i) => (
-                                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, marginBottom: 4 }}>
-                                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: i === 0 || i === geminiResult.route.length - 1 ? 'var(--accent)' : 'var(--border-strong)', border: '2px solid white', boxShadow: '0 0 0 1px var(--border)' }} />
-                                    <span style={{ fontWeight: i === 0 || i === geminiResult.route.length - 1 ? 600 : 400 }}>{stop}</span>
-                                </div>
-                            ))}
-                            {geminiResult.reasoning && <div style={{ marginTop: 8, padding: '10px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}><Route size={12} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle' }} />{geminiResult.reasoning}</div>}
-                            <div className="info-box info-box-green" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10 }}><CheckCircle2 size={18} /><div><strong>Queued</strong> — delivery added to dispatch queue.</div></div>
+                    {resultCard && (
+                        <div className="card">
+                            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 12, textTransform: 'uppercase' }}>Dispatch Result</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                                <span className="mono bold">{resultCard.id}</span>
+                                <span className={`badge ${statusBadge(resultCard.status)}`}>{resultCard.status.replace(/_/g, ' ')}</span>
+                            </div>
+                            <div style={{ fontWeight: 600, marginBottom: 4 }}>{resultCard.payload}</div>
+                            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>{resultCard.origin} to {resultCard.destination}</div>
+                            <RouteStops route={resultCard.route} />
+                            {resultCard.reasoning && <div style={{ padding: '10px 12px', background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)' }}><Route size={12} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle' }} />{resultCard.reasoning}</div>}
+                            <div className="info-box info-box-green" style={{ marginTop: 16 }}><strong>Created</strong> | {resultCard.status === 'READY_TO_LAUNCH' ? 'Mission is queued for launch.' : resultCard.status === 'PENDING_DISPATCH' ? 'Dispatch review is still underway.' : resultCard.status === 'WEATHER_HOLD' ? 'Weather hold applied.' : resultCard.status === 'IN_TRANSIT' ? 'Dispatch is active.' : 'Mission is synced to the operations queue.'}</div>
                         </div>
                     )}
                 </div>
@@ -373,20 +493,50 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ── Custody Ledger ── */
     if (hash === '#ledger') {
         return (
             <div>
-                <div className="page-header"><h1>Custody Ledger</h1><p>Immutable chain-of-custody records (Solana Devnet).</p></div>
+                <div className="page-header"><h1>Custody Ledger</h1><p>Delivered manifests with Solana-style custody attestations, memo payloads, and explorer traces for each handoff record.</p></div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16, marginBottom: 16 }}>
+                    <div className="stat-card"><div className="stat-label">ATTESTED DELIVERIES</div><div className="stat-value">{completedDeliveries.length}</div><div className="stat-sub stat-sub-muted">Each manifest gets a transaction signature.</div></div>
+                    <div className="stat-card"><div className="stat-label">SOLANA NETWORK</div><div className="stat-value">{completedDeliveries[0]?.solanaNetwork || 'devnet'}</div><div className="stat-sub stat-sub-muted">Fast settlement and public verification.</div></div>
+                    <div className="stat-card"><div className="stat-label">PROGRAM</div><div className="stat-value" style={{ fontSize: 22 }}>{completedDeliveries[0]?.solanaProgram || 'Memo Program v2'}</div><div className="stat-sub stat-sub-muted">Memo + PDA attestations keep custody records tamper-evident.</div></div>
+                </div>
+                <div className="card" style={{ marginBottom: 16, padding: 18 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>Why Solana helps</div>
+                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+                        Each completed mission is written as a memo-backed custody event with a transaction signature, slot, and derived PDA reference. That gives dispatch a fast, independently verifiable audit trail for who approved the shipment, which route was flown, and what payload reached the clinic without waiting on a private back-office reconciliation job.
+                    </div>
+                </div>
                 <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                     <table className="data-table">
-                        <thead><tr><th>Timestamp</th><th>ID</th><th>Payload</th><th>Route</th><th>Transaction</th></tr></thead>
+                        <thead><tr><th>Delivered</th><th>ID</th><th>Payload</th><th>Program</th><th>Slot</th><th>Transaction</th></tr></thead>
                         <tbody>
-                            {allApproved.map(d => (
-                                <tr key={d.id}><td className="mono muted">{new Date(d.createdAt).toLocaleString()}</td><td className="mono bold">{d.id}</td><td className="bold">{d.payload}</td><td className="muted">{d.origin} → {d.destination}</td>
-                                    <td><span className="tx-pill"><LinkIcon size={11} /> {d.solanaTx}<span className="tx-verified"><Lock size={10} /> Verified</span></span></td></tr>
+                            {completedDeliveries.map((delivery) => (
+                                <tr key={delivery.id}>
+                                    <td className="mono muted">{formatDateTime(delivery.createdAt)}</td>
+                                    <td className="mono bold">{delivery.id}</td>
+                                    <td>
+                                        <div className="bold">{delivery.payload}</div>
+                                        <div className="muted" style={{ fontSize: 12 }}>{delivery.origin} to {delivery.destination}</div>
+                                        {delivery.solanaMemo && <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{delivery.solanaMemo}</div>}
+                                    </td>
+                                    <td className="muted">{delivery.solanaProgram || 'Memo Program v2'}</td>
+                                    <td className="mono muted">{delivery.solanaSlot || '-'}</td>
+                                    <td>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                            <span className="tx-pill"><LinkIcon size={11} /> {formatSolanaSignature(delivery.solanaTx)}<span className="tx-verified"><Lock size={10} /> Verified</span></span>
+                                            {delivery.solanaExplorerUrl && (
+                                                <a href={delivery.solanaExplorerUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--accent)' }}>
+                                                    Explorer <ExternalLink size={12} />
+                                                </a>
+                                            )}
+                                        </div>
+                                        {delivery.solanaAccountPda && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>PDA {formatSolanaSignature(delivery.solanaAccountPda)}</div>}
+                                    </td>
+                                </tr>
                             ))}
-                            {allApproved.length === 0 && <tr><td colSpan={5} className="empty-row">No records.</td></tr>}
+                            {completedDeliveries.length === 0 && <tr><td colSpan={6} className="empty-row">No delivered manifests are ready for custody attestation yet.</td></tr>}
                         </tbody>
                     </table>
                 </div>
@@ -394,17 +544,23 @@ export default function DistributorPortal() {
         );
     }
 
-    /* ── History ── */
     if (hash === '#history') {
         return (
             <div>
-                <div className="page-header"><h1>Delivery History</h1><p>Completed and rejected deliveries.</p></div>
+                <div className="page-header"><h1>Delivery History</h1><p>All delivery requests and missions sorted by most recent activity.</p></div>
                 <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
                     <table className="data-table">
                         <thead><tr><th>Date</th><th>ID</th><th>Payload</th><th>Route</th><th>Status</th></tr></thead>
                         <tbody>
-                            {allHistory.map(d => (<tr key={d.id}><td className="mono muted">{new Date(d.createdAt).toLocaleString()}</td><td className="mono bold">{d.id}</td><td className="bold">{d.payload}</td><td className="muted">{d.origin} → {d.destination}</td><td><span className={`badge ${statusBadge(d.status)}`}>{d.status}</span></td></tr>))}
-                            {allHistory.length === 0 && <tr><td colSpan={5} className="empty-row">No history yet.</td></tr>}
+                            {history.map((delivery) => (
+                                <tr key={delivery.id}>
+                                    <td className="mono muted">{formatDateTime(delivery.createdAt)}</td>
+                                    <td className="mono bold">{delivery.id}</td>
+                                    <td className="bold">{delivery.payload}</td>
+                                    <td className="muted">{delivery.origin} to {delivery.destination}</td>
+                                    <td><span className={`badge ${statusBadge(delivery.status)}`}>{delivery.status.replace(/_/g, ' ')}</span></td>
+                                </tr>
+                            ))}
                         </tbody>
                     </table>
                 </div>

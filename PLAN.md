@@ -14,12 +14,21 @@
 - Rural Canadians face **higher death rates, increased infant mortality, and shorter life expectancy**. ^[publications.gc.ca]
 - Indigenous communities face compounded barriers from geographic isolation and systemic gaps. ^[euclid.int]
 
+### The Northern Quebec Cree Context
+
+- **9 Cree communities** along James Bay in Northern Quebec (Eeyou Istchee) — all served by nursing stations, not hospitals
+- Patients must travel **hundreds of kilometers** by air for medication or specialized care
+- Many communities are **only accessible by plane** for months at a time
+- **Staffing shortages** mean healthcare facilities can't fully utilize available supplies
+- **Language and cultural barriers** deter Indigenous individuals from seeking care
+- **COVID-19 exposed** critical supply chain vulnerabilities — PPE shortages, transport disruptions
+
 ### The Delivery Problem
 
-- Ground transport to remote communities can take **hours or days**, especially in winter.
-- Some communities are **only accessible by air** for months at a time (ice roads are seasonal and unreliable).
-- Existing air delivery (charter flights, helicopters) costs **$5,000–$15,000+ per flight** — unsustainable for routine medication.
-- Patients miss critical medication windows, leading to **preventable deterioration and hospitalizations**.
+- Ground transport to remote communities can take **hours or days**, especially in winter
+- Existing air delivery (charter flights, helicopters) costs **$5,000–$15,000+ per flight** — unsustainable for routine medication
+- Patients miss critical medication windows, leading to **preventable deterioration and hospitalizations**
+- Some communities lack ambulance services entirely — nursing stations are the only lifeline
 
 ---
 
@@ -38,12 +47,13 @@ Hospital/Pharmacy ──► Station A ──► Station B ──► Station C �
                     swap)         swap)         swap)
 ```
 
-1. **Order placed** — A healthcare provider requests a delivery through Aero'ed (web dashboard or voice command via ElevenLabs).
-2. **AI Dispatch** — Gemini API calculates the optimal relay route considering weather, station readiness, and priority.
-3. **Sealed Cartridge Swap** — At each station, the medicine travels in a **standardized sealed cartridge** that slots from one drone into the next. No manual handling, no open-air transfer. The spent drone docks; a fresh drone launches.
-4. **Blockchain Receipt** — Every handoff is recorded as an **immutable transaction on Solana** — tamper-proof chain-of-custody for controlled substances.
-5. **Real-time tracking** — MongoDB stores live GPS states; Snowflake aggregates corridor analytics. The platform shows live positions, station statuses, and ETAs.
-6. **Delivery confirmed** — Voice notification via ElevenLabs to the receiving health worker. Record closed.
+1. **Order placed** — A healthcare provider requests a delivery through Aero'ed (web dashboard, voice command, or clinic portal)
+2. **AI Dispatch** — Gemini API calculates the optimal relay route considering weather, station readiness, and priority
+3. **Auto-launch** — System automatically assigns the best available drone and launches upon approval — no manual intervention
+4. **Sealed Cartridge Swap** — At each station, a **standardized sealed cartridge** slots from one drone into the next. No manual handling
+5. **Blockchain Receipt** — Every handoff is recorded as an **immutable transaction on Solana** — tamper-proof chain-of-custody
+6. **Real-time tracking** — Live positions, ETAs, and progress updated in real-time across all portals
+7. **Delivery confirmed** — Voice notification via ElevenLabs to the receiving health worker. Record closed
 
 ### Why Relay Beats Direct Flight
 
@@ -63,25 +73,25 @@ Hospital/Pharmacy ──► Station A ──► Station B ──► Station C �
 
 | Drone | Range | Payload | Relevance |
 |---|---|---|---|
-| **DDC Sparrow** | 20–30 km | 4.5 kg | Canadian-made, healthcare-proven ^[dronedeliverycanada.com] |
+| **DDC Canary** (fmr. Sparrow) | 20–30 km | 4.5 kg | Canadian-made, **healthcare-proven**, BVLOS approved by Transport Canada ^[dronedeliverycanada.com] |
 | **DDC Robin XL** | 60 km | 11.3 kg | Temperature-controlled, harsh climate rated ^[DDC / suasnews.com] |
+| **DDC Condor** | Heavy-lift | 180 kg | Under testing with Transport Canada for heavy cargo ^[stattimes.com] |
 | **DJI FlyCart 30** | 16–26 km | 30 kg | Heavy-lift reference |
 | **Zipline P2** | 160 km (fixed-wing) | 1.8 kg | Proven medical delivery in Rwanda/Ghana |
 
+### Key BVLOS Milestone (2025)
+
+- **Transport Canada expanded BVLOS rules in November 2025** — new "Level 1 Complex Operations" certification simplifies approval for lower-risk flights ^[canada.ca]
+- DDC's Canary drone already holds BVLOS + dangerous goods transport approval for the "Care by Air" and "DroneCare" medical routes
+- Drones under 150 kg can now operate in uncontrolled airspace for BVLOS without case-by-case SFOCs
+
 ### Prototype Assumptions
 
-- **Drone class:** Multirotor VTOL (Sparrow-class)
+- **Drone class:** Multirotor VTOL (Canary-class)
 - **Effective range per leg:** **20 km** (conservative — accounts for wind, cold, payload)
 - **Payload:** 4–5 kg (covers most medication, insulin, blood samples, vaccines)
-- **Flight speed:** ~70 km/h → **~20 min per leg** (17 min flight + 3 min cartridge swap)
+- **Flight speed:** ~80 km/h → **~15 min per leg** (flight + cartridge swap)
 - **Station spacing:** 15–20 km
-
-### Example Corridor
-
-**Timmins → Moosonee, Ontario** (~300 km — currently 4+ hours when seasonal roads exist, inaccessible for months in spring/fall):
-
-- **15 relay stations** at 20 km spacing
-- **Total delivery time:** ~5 hours — **operates year-round regardless of road conditions**
 
 ---
 
@@ -100,92 +110,167 @@ Hospital/Pharmacy ──► Station A ──► Station B ──► Station C �
 | **Weather sensors** | Wind, temperature, visibility — feeds into routing AI |
 | **Heated battery compartments** | Maintains drone batteries at optimal temp in winter |
 
-### Pilot Phase Power Strategy
-
-The initial pilot corridor would use **grid-connected or hybrid-powered stations** near existing infrastructure (e.g., along Highway 11 toward Moosonee). Fully off-grid solar stations are a Phase 3 expansion once corridor economics are proven.
-
 ---
 
-## 5. The Software Platform (Our Product)
+## 5. The Software Platform (What We Built)
 
-### 5.1 Real-Time Fleet Dashboard
-- **Live map** showing all drone GPS positions (updated via MongoDB change streams)
-- Station status cards (battery levels, drone availability, weather)
-- Active delivery routes with relay progress indicators
-- ETA calculations adjusted in real-time by Gemini API based on conditions
+### 5.1 Three-Portal Architecture
 
-### 5.2 AI-Powered Dispatch (Gemini API)
-- **Natural language delivery requests** — health worker says: *"I need insulin delivered to Attawapiskat by end of day"*
-- Gemini processes the request, identifies the medicine type, calculates priority, and proposes the optimal relay route
+The platform serves three distinct user roles through a unified data layer:
+
+#### Admin Portal (`/admin`) — Platform Operations
+| Tab | Features |
+|---|---|
+| **Overview** | Real-time ops metrics, live weather radar map (Canada GeoMet WMS), AI recommendation engine, delivery list with status filtering, weather station heatmap |
+| **Routing** | Per-delivery weather analysis, manual reroute capability, Gemini-powered path insight AI, route visualization |
+| **Fleet** | Full drone fleet management, interactive corridor map with SVG drone icons, drone relocation, battery/health monitoring |
+| **Analytics** | AI-powered Q&A about system state via Gemini, natural language fleet queries |
+
+#### Distributor Portal (`/distributor`) — Pharmacy Dispatch
+| Tab | Features |
+|---|---|
+| **Overview** | Stats (pending/active/completed/fleet), live corridor map with drone selection, drone detail sidebar with telemetry, fleet status table |
+| **Incoming Requests** | Clinic supply requests awaiting approval, Gemini severity scoring, approve (auto-launches) / reject with confirmation modals |
+| **Active Deliveries** | Real-time progress bars, route visualization with station dots, ETA countdown, cancel button |
+| **Dispatch Console** | AI Assist mode (natural language → Gemini plans and auto-launches) + Manual mode (origin/destination/priority picker) |
+| **Custody Ledger** | Blockchain-verified delivery receipts with Solana TX hashes |
+| **History** | Complete delivery timeline with filtering |
+
+#### Receiver Portal (`/receiver`) — Clinic/Health Worker
+| Tab | Features |
+|---|---|
+| **Dashboard** | Stats, live corridor map (only inbound drones), next delivery card with ETA countdown, ElevenLabs voice arrival alerts |
+| **Request Supplies** | Form with voice dictation (Web Speech API), payload/priority/notes, Gemini auto-classifies severity, creates REQUESTED delivery |
+| **My Requests** | Real-time tracking of all related deliveries, progress bars, cancel for pre-approved requests |
+| **Inventory** | Received delivery history with payloads and dates |
+
+### 5.2 Delivery Lifecycle (Fully Automated)
+
+```
+REQUESTED ─── Distributor approves ──► auto-launch:
+                                        1. findBestRoute() computes optimal path using weather data
+                                        2. Assigns first available drone (highest battery)
+                                        3. ETA = haversine route distance / 80 km/h + weather delays
+                                        4. Status → IN_TRANSIT, simulation timer starts (15s legs)
+                                        5. Drone advances through stations automatically
+                                        6. On completion → DELIVERED, drone freed, voice alert sent
+
+REQUESTED ─── Distributor rejects ──► REJECTED
+
+IN_TRANSIT ─── Weather detected ──► WEATHER_HOLD (auto-resumes when clear)
+IN_TRANSIT ─── Admin reroutes ──► REROUTED (new path, continues)
+IN_TRANSIT ─── Dispatcher cancels ──► REJECTED (drone freed)
+
+PENDING_DISPATCH ── No route available ──► lifecycle monitor retries every 15s
+READY_TO_LAUNCH ── No drone available ──► lifecycle monitor retries every 15s
+```
+
+**Key: No manual "Launch" button exists.** Every delivery auto-launches the moment it's approved or created by a dispatcher.
+
+### 5.3 AI-Powered Dispatch (Gemini API)
+- **Natural language delivery requests** — "Send insulin to Chisasibi, urgent priority"
+- Gemini parses intent, identifies medicine type, calculates priority, proposes optimal relay route
+- **Request review** — Gemini auto-generates severity scores (1–5) and one-sentence summaries for clinic requests
 - **Dynamic rerouting** — if a station goes offline or weather degrades, Gemini recalculates mid-flight
-- **Weather impact analysis** — integrates forecast data to preemptively adjust dispatch timing
-- **Delivery summarization** — Gemini generates human-readable delivery reports and ETA explanations
+- **Weather impact analysis** — integrates real-time weather data to preemptively adjust dispatch timing
+- **Analytics Q&A** — natural language queries about fleet state, delivery history, performance
 
-### 5.3 Voice Interface (ElevenLabs)
-- **Voice-based dispatch** — healthcare workers in remote clinics with limited connectivity can call in delivery requests; ElevenLabs provides natural voice interaction
-- **Delivery status updates** — automated voice calls to receiving health workers: *"Your insulin delivery is 2 stations away, ETA 40 minutes"*
-- **Alert narration** — critical system alerts (drone failure, weather hold) are voiced to dispatchers for hands-free awareness
-- **Accessibility** — serves communities where typed interfaces are impractical (satellite phone, limited devices)
+### 5.4 Voice Interface (ElevenLabs)
+- **Voice dispatch** — healthcare workers can dictate delivery requests using Web Speech API → Gemini classifies
+- **Arrival alerts** — automated TTS voice calls when delivery ETA < 15 minutes
+- **Alert narration** — critical system alerts voiced for hands-free awareness
+- **Accessibility** — serves communities where typed interfaces are impractical
 
-### 5.4 Blockchain Chain-of-Custody (Solana)
+### 5.5 Blockchain Chain-of-Custody (Solana)
 - Every **cartridge handoff** is recorded as an on-chain transaction on Solana
-- Creates an **immutable, tamper-proof audit trail** — critical for controlled substances (opioids, narcotics)
-- **Smart contracts** for delivery payment — funds release automatically upon confirmed delivery receipt
-- **Regulatory compliance** — Health Canada pharmaceutical transport requires chain-of-custody; Solana provides cryptographic proof
-- Public verification: anyone (regulator, pharmacy, patient) can verify a delivery's full journey on-chain
+- Creates an **immutable, tamper-proof audit trail** — critical for controlled substances
+- **Custody ledger** visible in Distributor Portal with verification badges
+- Public verification: anyone (regulator, pharmacy, patient) can verify on-chain
 
-### 5.5 Real-Time Data Layer (MongoDB Atlas)
+### 5.6 Real-Time Data Layer (MongoDB Atlas)
 - **Operational database** — live drone states, station telemetry, active delivery records
-- **Change streams** power real-time dashboard updates via WebSockets
-- **Geospatial queries** — find nearest available drone, calculate station coverage areas
-- **Delivery documents** — full lifecycle from order → dispatch → each relay handoff → confirmation
-- **Station health records** — battery cycles, solar output, maintenance logs
+- **Auto-seeding** — demo data populates on startup with realistic Northern Quebec corridor
+- **Delivery simulation** — server-side interval timers advance delivery legs every 15 seconds
+- **Lifecycle monitor** — background process retries failed launches (no route / no drone) every 15 seconds
 
-### 5.6 Analytics & Business Intelligence (Snowflake)
-- **Data warehouse** — all historical delivery data, corridor performance, cost metrics piped from MongoDB
-- **Corridor economics dashboards** — cost-per-delivery, delivery success rate, average transit time by corridor
-- **Predictive analytics** — seasonal demand forecasting, station utilization optimization
-- **Government reporting** — automated compliance reports for health authority contracts (deliveries completed, SLAs met, cost savings vs. charter flights)
-- **Route optimization insights** — which corridors are underutilized, where to add/remove stations
+### 5.7 Real Weather Integration
+- **Canada Government GeoMet radar** — WMS tile overlay (`RADAR_1KM_RRAI`) on admin weather map
+- **Open-Meteo API** — per-station weather snapshots (temperature, wind, visibility, precipitation)
+- **Classification engine** — conditions classified as CLEAR / WATCH / UNSTABLE / SEVERE
+- **Routing integration** — weather state drives route selection, holds, and rerouting decisions
 
-### 5.7 Time Simulation (Demo Feature)
-- **Speed controls** (1x, 5x, 10x, 50x) — demonstrate hours of relay delivery in minutes
-- Simulated weather events trigger Gemini re-routing in real time
-- Handoff logs populate MongoDB and Solana on each simulated swap
-- Snowflake dashboards update with simulated historical data
+### 5.8 ETA Calculation (Accurate, Not Random)
+
+```
+routeDistanceKm = sum of haversine distances between consecutive route stations
+travelMinutes = (routeDistanceKm / 80 km/h) × 60
+weatherDelay = estimateRouteMinutes(route, priority, warnings) adjustments
+ETA = Date.now() + travelMinutes + weatherDelay
+```
+
+### 5.9 Map Components
+- **Shared CorridorMap** — Leaflet.js, preserves pan/zoom on prop changes, SVG quadcopter drone icons, station markers, delivery route overlays
+- **Admin OverviewWeatherMap** — GeoMet radar layer, weather station halos, same SVG drone icons
+- **Admin Fleet CorridorMap** — corridor lines, drone focus, relay visualization
 
 ---
 
-## 6. Sponsor Tool Integration Summary
+## 6. Demo Corridor: Chibougamau → Whapmagoostui
 
-| Tool | Role in Platform | Visibility in Demo |
+Our demo simulates the **James Bay inland corridor** through Eeyou Istchee (Cree territory):
+
+```
+Chibougamau Hub (Distribution)
+     │
+     ├── Mistissini
+     ├── Nemaska
+     ├── Waskaganish
+     ├── Eastmain
+     ├── Wemindji
+     ├── Chisasibi
+     └── Whapmagoostui
+
+Side branch: Chibougamau Hub → LaGrande Relay → Radisson → Whapmagoostui (Northlink spine)
+```
+
+- **~600 km** total network coverage
+- **12 stations** (1 distribution hub, 11 relay/community stations)
+- **5 drones** in seed fleet (Relay Alpha through Echo)
+- **Real community names** from the Cree Nation of Eeyou Istchee
+
+---
+
+## 7. Sponsor Tool Integration Summary
+
+| Tool | Role in Platform | Demo Visibility |
 |---|---|---|
-| **Gemini API** | AI dispatch, route optimization, NLP delivery requests, weather rerouting, report generation | User types/speaks a delivery request → Gemini parses it, plans the route, explains ETA |
-| **MongoDB Atlas** | Real-time operational database — drone states, deliveries, stations | Live dashboard updates as drones move; change streams power the map |
-| **Snowflake** | Analytics warehouse — corridor economics, delivery history, government reports | Analytics tab showing cost-per-delivery, success rates, demand forecasts |
-| **Solana** | Immutable chain-of-custody ledger, delivery payment smart contracts | Each handoff shows a Solana transaction hash; verify on-chain |
-| **ElevenLabs** | Voice dispatch, delivery status calls, alert narration | Health worker speaks to place an order; receives a voice ETA callback |
+| **Gemini API** | AI dispatch, route optimization, NLP delivery requests, severity scoring, weather rerouting, analytics Q&A | User types/speaks a delivery request → Gemini parses, plans route, explains ETA. Clinic requests get auto-scored |
+| **MongoDB Atlas** | Real-time operational database — drone states, deliveries, stations, simulation state | Live dashboard updates as drones move; delivery lifecycle runs server-side |
+| **Snowflake** | Analytics warehouse — corridor economics, delivery history, government compliance reports | Analytics tab with corridor performance metrics |
+| **Solana** | Immutable chain-of-custody ledger | Each delivery shows Solana TX hash in Custody Ledger; verification badge |
+| **ElevenLabs** | Voice alerts, delivery status TTS, arrival notifications | Receiver gets voice ETA alert when delivery approaches; voice input for requests |
 
 ---
 
-## 7. Business Model
+## 8. Business Model
 
-### Beachhead Customer: Ontario Health North
+### Beachhead Customer: Cree Board of Health and Social Services of James Bay (CBHSSJB)
 
-Our initial target is a **single provincial health authority** — specifically the nursing station network in Northern Ontario (James Bay coast). This region has:
-- ~20 remote First Nations communities along a single corridor
-- Existing reliance on expensive charter flights for medical resupply
-- Active government funding programs for rural health innovation
+Our initial target is the **James Bay Cree communities** — specifically the nursing station network in Eeyou Istchee, Northern Quebec. This region has:
+- **9 remote Cree communities** along the James Bay corridor
+- Existing reliance on expensive charter flights and seasonal road access
+- Active **Cree Health Board** managing healthcare delivery with federal/provincial funding
+- Strong community governance structure through the **Grand Council of the Crees**
 
 ### Revenue Streams
 
 | Stream | Description | Pricing |
 |---|---|---|
 | **Per-Delivery Fee** | Charge per relay delivery completed | $75–$200/delivery (distance + priority based) |
-| **Corridor Operating Contract** | Provincial health authority contracts Aero'ed to manage a relay corridor | $500K–$2M/year per corridor |
+| **Corridor Operating Contract** | Health authority contracts Aero'ed to manage a relay corridor | $500K–$2M/year per corridor |
 | **Platform Licensing (Future)** | License the software to other drone operators running their own corridors | $5K–$15K/month |
 
-### Unit Economics (Honest Assessment)
+### Unit Economics
 
 **Single 100 km pilot corridor (5 stations, 15 drones):**
 
@@ -204,105 +289,148 @@ Our initial target is a **single provincial health authority** — specifically 
 
 **However — the real economics depend on corridor contracts:**
 - A single government corridor contract ($500K–$2M/year) covers costs in **Year 1**
-- Charter flight replacement savings for the health authority: **$1.5M–$5M/year** per corridor — Aero'ed is a fraction of that cost
+- Charter flight replacement savings for the health authority: **$1.5M–$5M/year** per corridor
 - The value proposition is not per-delivery margin; it's **displacing $15K helicopter trips with $150 drone relays**
 
-### Why It's Viable
-
-1. **Government appetite** — Federal Rural Health Strategy and Indigenous Services Canada are actively funding alternatives to charter medical flights.
-2. **Differentiates through relay orchestration** — no other platform manages multi-station baton-pass logistics.
-3. **Regulation momentum** — Transport Canada is developing BVLOS frameworks; DDC already holds BVLOS approvals. ^[canada.ca]
-4. **Expandable** — Same corridors can carry non-medical cargo (mail, lab samples, emergency supplies), increasing utilization and per-corridor revenue.
-
 ---
 
-## 8. Market Opportunity
+## 9. Market Opportunity
 
 - **~1,200 remote/isolated communities** in Canada with limited healthcare access
-- Canadian drone services market projected at **$5.9B by 2030**
-- Medical drone delivery market: **$1.08B globally by 2030** (20%+ CAGR)
+- **Canada delivery drone market: $41.4M (2023) → $596.4M by 2030** (46.4% CAGR) ^[grandviewresearch.com]
+- **Canada total drone market: $617M (2025) → $1.5B by 2034** ^[imarcgroup.com]
+- **Global medical drone delivery: $420M (2025)** — growing at 25%+ CAGR ^[polarismarketresearch.com]
 - Federal/provincial healthcare budgets allocate billions to rural health — drones replace helicopters at a fraction of the cost
+- **Transport Canada's November 2025 BVLOS expansion** removes the single biggest regulatory barrier
 
 ---
 
-## 9. Competitive Landscape
+## 10. Competitive Landscape
 
 | Competitor | Approach | Why Aero'ed Is Different |
 |---|---|---|
-| **Drone Delivery Canada** | Direct point-to-point delivery (20–60 km) | We orchestrate multi-station relay corridors — DDC could be our hardware partner |
-| **Zipline** | Fixed-wing long-range | Requires dedicated launch catapults; not relay-based; no Canadian presence |
+| **Drone Delivery Canada** | Direct point-to-point delivery (20–60 km) | We orchestrate **multi-station relay corridors** — DDC could be our hardware partner |
+| **Zipline** | Fixed-wing long-range (catapult launch) | Not relay-based; no Canadian presence; not suitable for harsh winter VTOL |
 | **Amazon Prime Air / Wing** | Urban/suburban last-mile | Not designed for remote/rural; no cold-weather or relay capability |
 
 **Our moat:** Relay corridor orchestration software — dispatch, routing, handoff tracking, chain-of-custody, analytics. The drones and stations are **commodities**; the intelligence layer is the product.
 
 ---
 
-## 10. Roadmap
+## 11. Roadmap
 
-### Phase 1 — Hackathon MVP (Now)
-- Software platform prototype with full time simulation
-- One simulated corridor (Timmins → Moosonee)
-- All 5 sponsor tools integrated and demo-visible
+### Phase 1 — Hackathon MVP (Now ✅)
+- [x] Full software platform with 3-portal architecture
+- [x] Automated delivery lifecycle (request → approve → launch → track → deliver)
+- [x] Real weather integration (Government of Canada GeoMet radar + Open-Meteo API)
+- [x] AI dispatch with Gemini (natural language + structured output)
+- [x] Voice interface (ElevenLabs TTS + Web Speech API dictation)
+- [x] Solana chain-of-custody ledger
+- [x] Simulated James Bay corridor with real Cree community station names
 
 ### Phase 2 — Pilot (Year 1)
-- Deploy first physical corridor with Ontario Health North
-- Partner with DDC for hardware; focus on software operations
-- SFOC (Special Flight Operations Certificate) approval
+- Deploy first physical corridor with CBHSSJB / Ontario Health North
+- Partner with DDC for Canary hardware; focus on software operations
+- SFOC → Level 1 Complex Operations certification under new 2025 BVLOS rules
+- Community engagement with Cree Nation leadership
 
 ### Phase 3 — Expansion (Years 2–3)
-- 5–10 corridors across Northern Ontario, Manitoba, BC
-- Indigenous community partnerships
+- 5–10 corridors across Northern Quebec, Ontario, Manitoba, BC
+- Indigenous community partnerships and training programs
 - Grid-to-solar station transition for remote nodes
-- Non-medical cargo to increase corridor utilization
+- Non-medical cargo to increase corridor utilization (mail, lab samples, emergency supplies)
 
 ### Phase 4 — Platform Scale (Years 3–5)
 - License platform to international markets (Northern Scandinavia, Alaska, remote Pacific Islands)
 - API ecosystem for third-party corridor operators
+- Full Snowflake analytics integration for government compliance reporting
 
 ---
 
-## 11. Tech Stack
+## 12. Tech Stack
 
 | Layer | Technology |
 |---|---|
-| **Frontend** | HTML / CSS / JavaScript — interactive map (Leaflet.js + OpenStreetMap) |
+| **Frontend** | React + Vite, Leaflet.js (OpenStreetMap), Zustand state management |
 | **Backend** | Node.js + Express |
 | **Real-time DB** | MongoDB Atlas (drone states, deliveries, stations) |
 | **Analytics DW** | Snowflake (corridor economics, historical analytics, government reports) |
-| **AI/NLP** | Gemini API (dispatch optimization, NLP requests, weather rerouting) |
+| **AI/NLP** | Gemini API (dispatch optimization, NLP requests, weather rerouting, severity scoring) |
 | **Blockchain** | Solana (chain-of-custody ledger, delivery payment contracts) |
-| **Voice** | ElevenLabs (voice dispatch, status callbacks, alert narration) |
-| **Real-time Comms** | WebSockets (MongoDB change streams → frontend) |
+| **Voice** | ElevenLabs (TTS arrival alerts, status narration) + Web Speech API (dictation) |
+| **Weather** | Open-Meteo API + Government of Canada GeoMet WMS radar tiles |
 | **Maps** | Leaflet.js + OpenStreetMap (free, open-source) |
-| **Simulation** | Custom time-simulation engine (JS) |
+| **Simulation** | Server-side interval timers (15s legs), lifecycle monitor for auto-retries |
 
 ---
 
-## 12. Hackathon Deliverables
+## 13. Hackathon Deliverables
 
 | Deliverable | Status |
 |---|---|
 | ✅ Core business plan & model | This document |
-| 🔲 Software prototype (dispatch + tracking + relay simulation) | To build |
+| ✅ Software prototype (3-portal dispatch + tracking + relay simulation) | Built & running |
+| ✅ Automated delivery lifecycle (no manual launch) | Implemented |
+| ✅ Real weather integration | Government radar + Open-Meteo |
+| ✅ AI dispatch (Gemini) | Natural language + structured output |
+| ✅ Voice interface (ElevenLabs + Web Speech API) | Arrival alerts + dictation |
+| ✅ Chain-of-custody ledger (Solana) | TX hashes with verification |
 | 🔲 Pitch deck (8–10 slides) | To create |
 | 🔲 Source code (submitted to Devpost) | To submit |
-| 🔲 (Optional) Demo video | Stretch goal |
+| 🔲 Demo video | Stretch goal |
 
 ---
 
-## 13. Pitch Talking Points
+## 14. Pitch Talking Points
 
-1. **Open with the human cost** — *"A diabetic elder in Kashechewan, Ontario waits days for insulin when roads wash out. A $15,000 helicopter flight for a $30 medication."*
-2. **The relay insight** — *"We don't need a better drone. We need a smarter network. Sealed cartridge swap. Fresh drone. 20 minutes later, it's at the next station."*
-3. **We are the software layer** — *"Aero'ed is the operating system for drone relay corridors. Dispatch. Routing. Tracking. Chain-of-custody. Analytics. We don't build drones — we make relay networks intelligent."*
-4. **Show the simulation** — Live demo: dispatch a delivery → watch it relay through stations → see Solana transactions log → hear ElevenLabs confirm delivery.
-5. **One buyer, one corridor** — *"Our beachhead: Ontario Health North. Twenty nursing stations along James Bay. Replace helicopter resupply with $150 drone relays."*
+### Slide 1: The Human Cost
+*"A diabetic elder in Chisasibi waits days for insulin when weather grounds charter flights. A $15,000 helicopter trip for a $30 medication. 72% of Northern communities have no pharmacist. This isn't a developing-world problem — this is happening in Canada right now."*
 
-### Research Sources
-- [Drone Delivery Canada — Healthcare](https://dronedeliverycanada.com/applications/healthcare/)
-- DDC Sparrow: 20–30 km range, 4.5 kg payload ^[dronedeliverycanada.com]
-- DDC Robin XL: 60 km range, 11.3 kg payload, temperature-controlled ^[DDC / suasnews.com]
+### Slide 2: The Relay Insight
+*"We don't need a better drone. We need a smarter network. Sealed cartridge swap. Fresh drone. 15 minutes later, it's at the next station. Range doesn't matter when the network extends for hundreds of kilometers."*
+
+### Slide 3: The Platform
+*"Aero'ed is the operating system for drone relay corridors. Three portals — admin, pharmacy, clinic — all sharing one live data layer. A clinic requests insulin; the pharmacy approves; Gemini computes the route; a drone launches automatically. No phone calls. No fax machines. No $15K helicopter."*
+
+### Slide 4: Live Demo
+Dispatch a delivery → watch it relay through stations → see Solana transactions log → hear ElevenLabs voice alert.
+
+### Slide 5: The Technology
+- Gemini AI for intelligent dispatch and severity scoring
+- Real-time weather from Government of Canada radar
+- ElevenLabs voice interface for remote healthcare workers
+- Solana blockchain for auditable chain-of-custody
+- MongoDB Atlas for live fleet state
+
+### Slide 6: The Market
+*"$596M Canadian delivery drone market by 2030. ~1,200 remote communities. Transport Canada just cleared BVLOS in November 2025. The regulatory gate is open."*
+
+### Slide 7: Business Model
+*"One corridor contract with a health authority: $500K–$2M/year. Charter flight savings: $1.5M–$5M/year. We replace a $15,000 helicopter flight with a $150 drone relay."*
+
+### Slide 8: The Team & Ask
+*McGill AeroHacks 2026 submission. Seeking pilot partnership with CBHSSJB or Ontario Health North.*
+
+---
+
+## 15. Research Sources
+
+### Healthcare Access
 - 18% of Canadians are rural, 8% of doctors serve them ^[NIH / healthinsight.ca]
 - 72% of Northern Ontario communities lack pharmacist access ^[NIH]
 - 40.9% of Ontario rural residents within 5 km of pharmacy vs. 99.4% urban ^[NIH]
-- BVLOS regulatory framework progress ^[canada.ca — Transport Canada]
+- Cree communities accessible only by plane for months; must travel hundreds of km for medication ^[rimuhc.ca, fsss.qc.ca]
+- Viens Commission documented systemic barriers to Indigenous healthcare ^[cbc.ca]
+
+### Drone Industry
+- DDC Canary: BVLOS + dangerous goods approved for healthcare routes ^[dronedeliverycanada.com, newswire.ca]
+- DDC Condor: Under testing with Transport Canada for heavy cargo ^[stattimes.com]
+- Transport Canada BVLOS expansion: November 4, 2025 — Level 1 Complex Operations certification ^[canada.ca, cbc.ca]
+- Canada delivery drone market: $41.4M (2023) → $596.4M by 2030, 46.4% CAGR ^[grandviewresearch.com]
+- Canada total drone market: $617M (2025) → $1.5B by 2034 ^[imarcgroup.com]
+- Global medical drone delivery: $420M (2025), 25%+ CAGR ^[polarismarketresearch.com]
+
+### Regulatory
+- BVLOS regulatory framework progress — Transport Canada ^[canada.ca]
+- Level 1 Complex Operations pilot certification available April 2025 ^[abjacademy.global]
+- Drones under 150 kg can operate BVLOS in uncontrolled airspace without individual SFOCs ^[canada.ca]

@@ -321,6 +321,7 @@ select {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  padding: 20px 24px;
 }
 
 .card-body {
@@ -352,6 +353,10 @@ select {
 }
 
 .stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   padding: 20px 24px;
 }
 
@@ -628,6 +633,14 @@ select {
   font-family: var(--mono);
 }
 
+.bold {
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--text-secondary);
+}
+
 .text-sm {
   font-size: 13px;
 }
@@ -638,6 +651,11 @@ select {
 
 .capitalize {
   text-transform: capitalize;
+}
+
+.badge-amber {
+  background: var(--warning-light);
+  color: var(--warning);
 }
 
 /* ── Login Page ── */

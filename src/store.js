@@ -14,6 +14,41 @@ async function requestJson(url, options = {}) {
     return data;
 }
 
+function buildOverviewState(overview) {
+    return {
+        deliveries: overview.deliveries || [],
+        stations: overview.stations || [],
+        drones: overview.drones || [],
+        lines: overview.lines || [],
+        opsOverview: overview,
+    };
+}
+
+let operationalStateRequest = null;
+
+function fetchOperationalState(set, reuseInFlight = false) {
+    if (reuseInFlight && operationalStateRequest) {
+        return operationalStateRequest;
+    }
+
+    const request = requestJson('/api/ops/overview')
+        .then((overview) => {
+            set(buildOverviewState(overview));
+            return overview;
+        })
+        .finally(() => {
+            if (operationalStateRequest === request) {
+                operationalStateRequest = null;
+            }
+        });
+
+    if (reuseInFlight) {
+        operationalStateRequest = request;
+    }
+
+    return request;
+}
+
 export const useStore = create((set, get) => ({
     deliveries: [],
     stations: [],
@@ -35,32 +70,21 @@ export const useStore = create((set, get) => ({
         set({ isLoading: true, error: null });
 
         try {
-            const [deliveries, stations, drones, lines] = await Promise.all([
-                requestJson('/api/deliveries'),
-                requestJson('/api/stations'),
-                requestJson('/api/drones'),
-                requestJson('/api/lines'),
-            ]);
-
-            set({
-                deliveries,
-                stations,
-                drones,
-                lines,
-                hasInitialized: true,
-                isLoading: false,
-                error: null,
-            });
+            await get().refreshOperationalState(true);
+            set({ hasInitialized: true, isLoading: false, error: null });
         } catch (err) {
             set({ isLoading: false, error: err.message });
             throw err;
         }
     },
 
+    refreshOperationalState: async (reuseInFlight = false) => {
+        return fetchOperationalState(set, reuseInFlight);
+    },
+
     fetchDeliveries: async () => {
-        const deliveries = await requestJson('/api/deliveries');
-        set({ deliveries });
-        return deliveries;
+        const overview = await get().refreshOperationalState(true);
+        return overview.deliveries;
     },
 
     addDelivery: async (deliveryReq) => {
@@ -70,7 +94,46 @@ export const useStore = create((set, get) => ({
             body: JSON.stringify(deliveryReq),
         });
 
-        set((state) => ({ deliveries: [delivery, ...state.deliveries] }));
+        await get().initializeData(true);
+        return delivery;
+    },
+
+    createSupplyRequest: async (requestBody) => {
+        const delivery = await requestJson('/api/deliveries/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+        });
+
+        await get().initializeData(true);
+        return delivery;
+    },
+
+    previewSupplyRequest: async (requestBody) => {
+        return requestJson('/api/deliveries/request/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+        });
+    },
+
+    approveDelivery: async (id, action) => {
+        const delivery = await requestJson(`/api/deliveries/${id}/approve`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action }),
+        });
+
+        await get().initializeData(true);
+        return delivery;
+    },
+
+    cancelDelivery: async (id) => {
+        const delivery = await requestJson(`/api/deliveries/${id}/cancel`, {
+            method: 'PATCH',
+        });
+
+        await get().initializeData(true);
         return delivery;
     },
 
@@ -81,14 +144,7 @@ export const useStore = create((set, get) => ({
             body: JSON.stringify({ scenario }),
         });
 
-        set((state) => ({
-            deliveries: [result.delivery, ...state.deliveries],
-            opsOverview: state.opsOverview ? {
-                ...state.opsOverview,
-                deliveries: [result.delivery, ...state.opsOverview.deliveries],
-            } : state.opsOverview,
-        }));
-
+        await get().initializeData(true);
         return result;
     },
 
@@ -96,15 +152,8 @@ export const useStore = create((set, get) => ({
         set({ opsLoading: true });
 
         try {
-            const overview = await requestJson('/api/ops/overview');
-            set({
-                deliveries: overview.deliveries,
-                stations: overview.stations,
-                drones: overview.drones,
-                lines: overview.lines,
-                opsOverview: overview,
-                opsLoading: false,
-            });
+            const overview = await get().refreshOperationalState(true);
+            set({ opsLoading: false });
             return overview;
         } catch (err) {
             set({ opsLoading: false });
@@ -185,15 +234,7 @@ export const useStore = create((set, get) => ({
             method: 'DELETE',
         });
 
-        set((state) => ({
-            deliveries: state.deliveries.filter((entry) => entry.id !== id),
-            opsOverview: state.opsOverview ? {
-                ...state.opsOverview,
-                deliveries: state.opsOverview.deliveries.filter((entry) => entry.id !== id),
-            } : state.opsOverview,
-            pathInsight: state.pathInsight?.delivery?.id === id ? null : state.pathInsight,
-        }));
-
+        await get().initializeData(true);
         return result;
     },
 
@@ -204,19 +245,13 @@ export const useStore = create((set, get) => ({
             body: JSON.stringify({ status }),
         });
 
-        set((state) => ({
-            deliveries: state.deliveries.map((entry) => (
-                entry.id === id ? delivery : entry
-            )),
-        }));
-
+        await get().initializeData(true);
         return delivery;
     },
 
     fetchStations: async () => {
-        const stations = await requestJson('/api/stations');
-        set({ stations });
-        return stations;
+        const overview = await get().refreshOperationalState();
+        return overview.stations;
     },
 
     addStation: async (stationData) => {
@@ -226,7 +261,7 @@ export const useStore = create((set, get) => ({
             body: JSON.stringify(stationData),
         });
 
-        set((state) => ({ stations: [...state.stations, station] }));
+        await get().refreshOperationalState();
         return station;
     },
 
@@ -235,41 +270,14 @@ export const useStore = create((set, get) => ({
             method: 'DELETE',
         });
 
-        set((state) => ({
-            stations: state.stations.filter((station) => station.id !== id),
-            lines: Array.isArray(result.lines)
-                ? result.lines
-                : state.lines.map((line) => ({
-                    ...line,
-                    stations: line.stations.filter((stationId) => stationId !== id),
-                })),
-            drones: state.drones.map((drone) => {
-                const updated = result.updatedDrones?.find((entry) => entry.id === drone.id);
-                return updated || drone;
-            }),
-            opsOverview: state.opsOverview ? {
-                ...state.opsOverview,
-                stations: state.opsOverview.stations.filter((station) => station.id !== id),
-                lines: Array.isArray(result.lines)
-                    ? result.lines
-                    : state.opsOverview.lines.map((line) => ({
-                        ...line,
-                        stations: line.stations.filter((stationId) => stationId !== id),
-                    })),
-                drones: state.opsOverview.drones.map((drone) => {
-                    const updated = result.updatedDrones?.find((entry) => entry.id === drone.id);
-                    return updated || drone;
-                }),
-            } : state.opsOverview,
-        }));
+        await get().refreshOperationalState();
 
         return result;
     },
 
     fetchDrones: async () => {
-        const drones = await requestJson('/api/drones');
-        set({ drones });
-        return drones;
+        const overview = await get().refreshOperationalState();
+        return overview.drones;
     },
 
     relocateDrone: async (id, payload = {}) => {
@@ -291,6 +299,7 @@ export const useStore = create((set, get) => ({
             } : state.opsOverview,
         }));
 
+        await get().refreshOperationalState();
         return result;
     },
 
@@ -313,6 +322,7 @@ export const useStore = create((set, get) => ({
             } : state.opsOverview,
         }));
 
+        await get().refreshOperationalState();
         return result;
     },
 
@@ -323,7 +333,7 @@ export const useStore = create((set, get) => ({
             body: JSON.stringify(droneData),
         });
 
-        set((state) => ({ drones: [...state.drones, drone] }));
+        await get().refreshOperationalState();
         return drone;
     },
 
@@ -332,13 +342,7 @@ export const useStore = create((set, get) => ({
             method: 'DELETE',
         });
 
-        set((state) => ({
-            drones: state.drones.filter((drone) => drone.id !== id),
-            opsOverview: state.opsOverview ? {
-                ...state.opsOverview,
-                drones: state.opsOverview.drones.filter((drone) => drone.id !== id),
-            } : state.opsOverview,
-        }));
+        await get().refreshOperationalState();
 
         return result;
     },
@@ -349,7 +353,7 @@ export const useStore = create((set, get) => ({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updates),
         });
-        set((state) => ({ stations: state.stations.map((s) => (s.id === id ? station : s)) }));
+        await get().refreshOperationalState();
         return station;
     },
 
@@ -359,7 +363,7 @@ export const useStore = create((set, get) => ({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updates),
         });
-        set((state) => ({ drones: state.drones.map((d) => (d.id === id ? drone : d)) }));
+        await get().refreshOperationalState();
         return drone;
     },
 
@@ -370,7 +374,7 @@ export const useStore = create((set, get) => ({
             body: JSON.stringify(lineData),
         });
 
-        set((state) => ({ lines: [...state.lines, line] }));
+        await get().refreshOperationalState();
         return line;
     },
 
@@ -379,13 +383,7 @@ export const useStore = create((set, get) => ({
             method: 'DELETE',
         });
 
-        set((state) => ({
-            lines: state.lines.filter((line) => line.id !== id),
-            opsOverview: state.opsOverview ? {
-                ...state.opsOverview,
-                lines: state.opsOverview.lines.filter((line) => line.id !== id),
-            } : state.opsOverview,
-        }));
+        await get().refreshOperationalState();
 
         return result;
     },
@@ -397,7 +395,7 @@ export const useStore = create((set, get) => ({
             body: JSON.stringify(updates),
         });
 
-        set((state) => ({ lines: state.lines.map((l) => (l.id === id ? line : l)) }));
+        await get().refreshOperationalState();
         return line;
     },
 }));

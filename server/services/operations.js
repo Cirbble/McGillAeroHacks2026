@@ -1,4 +1,6 @@
 export const DELIVERY_STATUSES = [
+    'REQUESTED',
+    'CANCELLED',
     'PENDING_DISPATCH',
     'AWAITING_REVIEW',
     'READY_TO_LAUNCH',
@@ -649,7 +651,7 @@ export function planDeliveryOperation({
     if (status === 'PENDING_DISPATCH') {
         status = routeAssessment.routeState === 'BLOCKED' ? 'WEATHER_HOLD' : 'READY_TO_LAUNCH';
     }
-    if (status === 'AWAITING_REVIEW' || status === 'REJECTED') {
+    if (status === 'REQUESTED' || status === 'AWAITING_REVIEW' || status === 'REJECTED' || status === 'CANCELLED') {
         // Leave as-is.
     } else if (routeAssessment.routeState === 'BLOCKED') {
         status = 'WEATHER_HOLD';
@@ -675,9 +677,13 @@ export function planDeliveryOperation({
     });
     const recommendedAction = status === 'REJECTED'
         ? 'Remove this request from the dispatch queue and notify the sender of the policy rejection.'
+        : status === 'CANCELLED'
+            ? 'This mission was cancelled and should remain archived for audit only.'
+        : status === 'REQUESTED'
+            ? 'Keep this request in the intake queue until a dispatcher approves the manifest for launch planning.'
         : status === 'AWAITING_REVIEW'
             ? 'Keep the mission in review until pharmacy details and compliance checks are complete.'
-            : status === 'WEATHER_HOLD'
+        : status === 'WEATHER_HOLD'
                 ? hasAlternateRoute
                     ? 'Pause launch on the current path and manually approve the suggested alternate corridor if the mission must continue.'
                     : 'Pause launch and wait for safer weather before continuing on the planned corridor.'
@@ -717,11 +723,17 @@ export function planDeliveryOperation({
             makeEvent('ROUTE_PLANNED', 'Route evaluated', `Primary corridor review completed for ${sanitized.destination}.`)
         );
     }
+    if (status === 'REQUESTED') {
+        newEvents.push(makeEvent('REQUEST_QUEUED', 'Awaiting dispatcher approval', recommendedAction));
+    }
     if (status === 'AWAITING_REVIEW') {
         newEvents.push(makeEvent('REVIEW_REQUIRED', 'Dispatch review required', recommendedAction));
     }
     if (status === 'REJECTED') {
         newEvents.push(makeEvent('REQUEST_REJECTED', 'Cargo rejected', recommendedAction));
+    }
+    if (status === 'CANCELLED') {
+        newEvents.push(makeEvent('MISSION_CANCELLED', 'Mission cancelled', recommendedAction));
     }
     if (shouldUseReroute) {
         newEvents.push(makeEvent(
@@ -766,7 +778,7 @@ export function planDeliveryOperation({
         totalLegs: Math.max(1, fullRoute.length - 1),
         currentLeg: Number(sanitized.currentLeg || 0),
         manualAttentionRequired: Boolean(sanitized.manualAttentionRequired)
-            || ['AWAITING_REVIEW', 'WEATHER_HOLD'].includes(status)
+            || ['REQUESTED', 'AWAITING_REVIEW', 'WEATHER_HOLD'].includes(status)
             || (hasAlternateRoute && !shouldUseReroute && primaryAssessment.routeState !== 'CLEAR'),
         rerouteCount: Number(sanitized.rerouteCount || 0) + (shouldUseReroute ? 1 : 0),
         lastReroutedAt: shouldUseReroute ? new Date() : sanitized.lastReroutedAt || null,
