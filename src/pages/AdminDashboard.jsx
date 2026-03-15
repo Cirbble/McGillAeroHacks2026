@@ -1126,6 +1126,7 @@ export default function AdminDashboard() {
     const [editingNodeId, setEditingNodeId] = useState(null);
     const [infraOpen, setInfraOpen] = useState({ nodes: false, drones: false, lines: false, cameras: false });
     const toggleInfra = (key) => setInfraOpen(s => ({ ...s, [key]: !s[key] }));
+    const [infraSearch, setInfraSearch] = useState({ nodes: '', drones: '', lines: '' });
 
     const emptyLineForm = { id: '', name: '', color: '#3b82f6', stations: [] };
     const [showLineModal, setShowLineModal] = useState(false);
@@ -2142,6 +2143,10 @@ export default function AdminDashboard() {
                     </div>
                     {infraOpen.nodes && (
                         <div style={{ borderTop: '1px solid var(--border)' }}>
+                            <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
+                                <input type="text" placeholder="Search nodes…" value={infraSearch.nodes} onChange={e => setInfraSearch(s => ({ ...s, nodes: e.target.value }))} className="form-input" style={{ padding: '6px 10px', fontSize: 12, width: '100%' }} />
+                            </div>
+                            <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                             {stations.length === 0 ? (
                                 <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No nodes for now.</div>
                             ) : (
@@ -2150,7 +2155,7 @@ export default function AdminDashboard() {
                                         <tr><th>Node Name</th><th>Type</th><th>Status</th><th>Battery Array</th><th>Pad Temp</th><th>Drones</th><th>Coords</th><th></th></tr>
                                     </thead>
                                     <tbody>
-                                        {stations.map(s => {
+                                        {stations.filter(s => s.id.toLowerCase().includes(infraSearch.nodes.toLowerCase())).map(s => {
                                             const current = drones.filter(d => d.location.toLowerCase().includes(s.id.toLowerCase().split(' ')[0])).length;
                                             const typeLabel = s.type === 'pick_up' ? 'pick up' : s.type;
                                             return (
@@ -2185,6 +2190,7 @@ export default function AdminDashboard() {
                                     </tbody>
                                 </table>
                             )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -2201,6 +2207,10 @@ export default function AdminDashboard() {
                     </div>
                     {infraOpen.drones && (
                         <div style={{ borderTop: '1px solid var(--border)' }}>
+                            <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
+                                <input type="text" placeholder="Search drones…" value={infraSearch.drones} onChange={e => setInfraSearch(s => ({ ...s, drones: e.target.value }))} className="form-input" style={{ padding: '6px 10px', fontSize: 12, width: '100%' }} />
+                            </div>
+                            <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                             {drones.length === 0 ? (
                                 <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No drones for now.</div>
                             ) : (
@@ -2209,7 +2219,7 @@ export default function AdminDashboard() {
                                         <tr><th>Drone ID</th><th>Name</th><th>Model</th><th>Location</th><th>Battery</th><th>Batt. Health</th><th>Status</th><th>Target</th><th>Arrival</th><th></th></tr>
                                     </thead>
                                     <tbody>
-                                        {drones.map(d => (
+                                        {drones.filter(d => d.name.toLowerCase().includes(infraSearch.drones.toLowerCase())).map(d => (
                                             <tr key={d.id}>
                                                 <td className="mono" style={{ fontWeight: 600 }}>{d.droneId}</td>
                                                 <td className="bold">{d.name}</td>
@@ -2243,6 +2253,7 @@ export default function AdminDashboard() {
                                     </tbody>
                                 </table>
                             )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -2259,6 +2270,10 @@ export default function AdminDashboard() {
                     </div>
                     {infraOpen.lines && (
                         <div style={{ borderTop: '1px solid var(--border)' }}>
+                            <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
+                                <input type="text" placeholder="Search lines…" value={infraSearch.lines} onChange={e => setInfraSearch(s => ({ ...s, lines: e.target.value }))} className="form-input" style={{ padding: '6px 10px', fontSize: 12, width: '100%' }} />
+                            </div>
+                            <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                             {lines.length === 0 ? (
                                 <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-tertiary)', fontSize: 13 }}>No lines defined yet.</div>
                             ) : (
@@ -2267,7 +2282,7 @@ export default function AdminDashboard() {
                                         <tr><th>ID</th><th>Name</th><th>Color</th><th>Stations</th><th></th></tr>
                                     </thead>
                                     <tbody>
-                                        {lines.map(l => (
+                                        {lines.filter(l => l.name.toLowerCase().includes(infraSearch.lines.toLowerCase())).map(l => (
                                             <tr key={l.id}>
                                                 <td className="mono" style={{ fontWeight: 600 }}>{l.id}</td>
                                                 <td className="bold">{l.name}</td>
@@ -2289,6 +2304,7 @@ export default function AdminDashboard() {
                                     </tbody>
                                 </table>
                             )}
+                            </div>
                         </div>
                     )}
                 </div>
