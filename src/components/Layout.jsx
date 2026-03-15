@@ -26,6 +26,7 @@ export default function Layout({ user, setUser, children }) {
 
     const navConfig = {
         admin: [
+            { name: 'Dashboard', hash: '#dashboard', icon: Map },
             { name: 'Platform Overview', hash: '', icon: LayoutDashboard },
             { name: 'Live Operations', hash: '#operations', icon: Radio },
             { name: 'Infrastructure', hash: '#infrastructure', icon: Server },

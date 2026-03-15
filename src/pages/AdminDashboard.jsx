@@ -586,6 +586,134 @@ function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], 
     return <div ref={mapRef} style={{ width: '100%', height }} />;
 }
 
+function DashboardMap({ stations = [], drones = [], lines = [], showWeatherOverlay = false, height = 500 }) {
+    const mapRef = useRef(null);
+    const mapInstance = useRef(null);
+
+    useEffect(() => {
+        async function init() {
+            const L = (await import('leaflet')).default;
+            await import('leaflet/dist/leaflet.css');
+            if (!mapRef.current) return;
+            if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; }
+
+            const stationsById = Object.fromEntries(stations.map(s => [s.id, s]));
+            const makeDroneSvg = (c) => `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><line x1="14" y1="14" x2="5" y2="5" stroke="${c}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="5" stroke="${c}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="5" y2="23" stroke="${c}" stroke-width="2" stroke-linecap="round"/><line x1="14" y1="14" x2="23" y2="23" stroke="${c}" stroke-width="2" stroke-linecap="round"/><circle cx="5" cy="5" r="3.5" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="23" cy="5" r="3.5" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="5" cy="23" r="3.5" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="23" cy="23" r="3.5" fill="none" stroke="${c}" stroke-width="1.5"/><circle cx="14" cy="14" r="4.5" fill="${c}" stroke="white" stroke-width="2"/></svg>`;
+
+            const lats = stations.map(s => s.lat);
+            const lngs = stations.map(s => s.lng);
+            const centerLat = lats.length ? (Math.min(...lats) + Math.max(...lats)) / 2 : 52.0;
+            const centerLng = lngs.length ? (Math.min(...lngs) + Math.max(...lngs)) / 2 : -72.0;
+            const zoom = stations.length > 12 ? 5 : 6;
+
+            const map = L.map(mapRef.current, {
+                center: [centerLat, centerLng], zoom,
+                zoomControl: false, attributionControl: false,
+                zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false,
+            });
+
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+            L.control.zoom({ position: 'topright' }).addTo(map);
+
+            if (showWeatherOverlay) {
+                const radarPane = map.createPane('radarPane');
+                radarPane.style.zIndex = 340;
+                L.tileLayer.wms(RADAR_WMS_URL, {
+                    pane: 'radarPane',
+                    layers: RADAR_WMS_LAYER,
+                    styles: RADAR_WMS_STYLE,
+                    format: 'image/png',
+                    transparent: true,
+                    version: '1.3.0',
+                    opacity: 0.58,
+                    crossOrigin: true,
+                }).addTo(map);
+            }
+
+            // Draw lines
+            lines.forEach(line => {
+                const coords = line.stations.map(id => stationsById[id]).filter(Boolean).map(s => [s.lat, s.lng]);
+                if (coords.length > 1) L.polyline(coords, { color: line.color, weight: 3, opacity: 0.75 }).addTo(map);
+            });
+
+            // Station markers
+            stations.forEach(station => {
+                const isActive = station.status === 'online';
+                const size = station.type === 'distribution' ? 16 : 12;
+                const anchor = size / 2;
+                const stationLines = lines.filter(l => l.stations.includes(station.id));
+                const markerColor = stationLines.length > 0 ? stationLines[0].color : (isActive ? '#2563eb' : '#94a3b8');
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${isActive ? markerColor : '#94a3b8'};border:3px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.2);"></div>`,
+                    iconSize: [size, size], iconAnchor: [anchor, anchor],
+                });
+                const lineNames = stationLines.map(l => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${l.color};margin-right:3px;"></span>${l.name}`).join(' · ');
+                L.marker([station.lat, station.lng], { icon })
+                    .addTo(map)
+                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${station.id}</strong><br/><span style="color:#64748b">${getStationLabel(station)}</span>${lineNames ? `<br/><span style="color:#64748b;font-size:10px;">${lineNames}</span>` : ''}</div>`, { direction: 'top', offset: [0, -10] });
+            });
+
+            // Flying drones: place at midpoint of route
+            const dronePositions = getDroneMapPositions(
+                drones.filter(d => d.status === 'on_route' || d.status === 'relocating'),
+                stations,
+            );
+            dronePositions.forEach(({ lat, lng, drone, tooltip }) => {
+                const color = drone.status === 'relocating' ? '#3b82f6' : '#f59e0b';
+                const droneIcon = L.divIcon({
+                    className: '',
+                    html: `<div style="filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));">${makeDroneSvg(color)}</div>`,
+                    iconSize: [28, 28], iconAnchor: [14, 14],
+                });
+                L.marker([lat, lng], { icon: droneIcon })
+                    .addTo(map)
+                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;">${tooltip}</div>`, { direction: 'top', offset: [0, -16] });
+            });
+
+            // Stationary drones (ready/charging): show at station
+            drones.filter(d => d.status === 'ready' || d.status === 'charging').forEach(drone => {
+                const station = findStationMatch(drone.location, stations);
+                if (!station) return;
+                const color = drone.status === 'ready' ? '#22c55e' : '#ef4444';
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div style="filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));">${makeDroneSvg(color)}</div>`,
+                    iconSize: [28, 28], iconAnchor: [14, 14],
+                });
+                L.marker([station.lat, station.lng], { icon })
+                    .addTo(map)
+                    .bindTooltip(`<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${drone.id}</strong> · ${drone.name}<br/><span style="color:#64748b;">${drone.status} @ ${station.id}</span></div>`, { direction: 'top', offset: [0, -16] });
+            });
+
+            // Legend
+            if (lines.length > 0) {
+                const legend = L.control({ position: 'bottomleft' });
+                legend.onAdd = () => {
+                    const div = L.DomUtil.create('div');
+                    div.style.cssText = 'background:white;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;font-family:Inter,sans-serif;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,0.08);min-width:130px;';
+                    div.innerHTML =
+                        `<div style="font-weight:700;margin-bottom:8px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Lines</div>` +
+                        lines.map(l => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><div style="width:22px;height:3px;background:${l.color};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">${l.name}</span></div>`).join('') +
+                        `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;font-weight:700;margin-bottom:6px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Drones</div>` +
+                        `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;"><div style="width:10px;height:10px;border-radius:50%;background:#22c55e;flex-shrink:0;"></div><span>Ready</span></div>` +
+                        `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;"><div style="width:10px;height:10px;border-radius:50%;background:#ef4444;flex-shrink:0;"></div><span>Charging</span></div>` +
+                        `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;"><div style="width:10px;height:10px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></div><span>On route</span></div>` +
+                        `<div style="display:flex;align-items:center;gap:8px;"><div style="width:10px;height:10px;border-radius:50%;background:#3b82f6;flex-shrink:0;"></div><span>Relocating</span></div>`;
+                    return div;
+                };
+                legend.addTo(map);
+            }
+
+            mapInstance.current = map;
+        }
+        init();
+        return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; } };
+    }, [stations, drones, lines, showWeatherOverlay]);
+
+    return <div ref={mapRef} style={{ width: '100%', height }} />;
+}
+
 function OverviewWeatherMap({
     stations = [],
     drones = [],
@@ -927,6 +1055,10 @@ export default function AdminDashboard() {
     const [lineForm, setLineForm] = useState(emptyLineForm);
     const [editingLineId, setEditingLineId] = useState(null);
 
+    const [showDashboardDrones, setShowDashboardDrones] = useState(true);
+    const [hiddenDashboardLineIds, setHiddenDashboardLineIds] = useState(new Set());
+    const [dashboardWeather, setDashboardWeather] = useState(false);
+
     const [selectedDroneId, setSelectedDroneId] = useState(null);
     const [selectedDeliveryId, setSelectedDeliveryId] = useState(null);
     const [reroutingDeliveryId, setReroutingDeliveryId] = useState(null);
@@ -957,7 +1089,7 @@ export default function AdminDashboard() {
     ];
 
     useEffect(() => {
-        if (!['', '#operations', '#analytics'].includes(hash)) return;
+        if (!['', '#operations', '#analytics', '#dashboard'].includes(hash)) return;
 
         fetchOpsOverview().catch((err) => {
             console.error('Failed to load ops overview:', err);
@@ -2481,6 +2613,93 @@ export default function AdminDashboard() {
                                 <Send size={14} />
                             </button>
                         </form>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    /* ── Dashboard ── */
+    if (hash === '#dashboard') {
+        const toggleLine = (id) => setHiddenDashboardLineIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+
+        const visibleDrones = showDashboardDrones ? displayDrones : [];
+        const visibleLines = lines.filter(l => !hiddenDashboardLineIds.has(l.id));
+
+        return (
+            <div>
+                <div className="page-header">
+                    <h1>Dashboard</h1>
+                    <p>Full corridor map with fleet and line visibility controls.</p>
+                </div>
+
+                <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+                    {/* Map */}
+                    <div className="card" style={{ flex: 1, padding: 0, overflow: 'hidden', minWidth: 0 }}>
+                        <DashboardMap
+                            stations={orderedStations}
+                            drones={visibleDrones}
+                            lines={visibleLines}
+                            showWeatherOverlay={dashboardWeather}
+                            height={600}
+                        />
+                    </div>
+
+                    {/* Toggle panel */}
+                    <div style={{ width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        {/* Overlays */}
+                        <div className="card" style={{ padding: 16 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 12 }}>Overlays</div>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, marginBottom: 9 }}>
+                                <input
+                                    type="checkbox"
+                                    checked={showDashboardDrones}
+                                    onChange={() => setShowDashboardDrones(v => !v)}
+                                    style={{ width: 15, height: 15, accentColor: '#64748b', cursor: 'pointer' }}
+                                />
+                                Drones
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13 }}>
+                                <input
+                                    type="checkbox"
+                                    checked={dashboardWeather}
+                                    onChange={() => setDashboardWeather(v => !v)}
+                                    style={{ width: 15, height: 15, accentColor: '#2563eb', cursor: 'pointer' }}
+                                />
+                                Weather Radar
+                            </label>
+                        </div>
+
+                        {/* Lines */}
+                        <div className="card" style={{ padding: 16 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Lines</div>
+                                <button
+                                    style={{ fontSize: 10, color: 'var(--text-secondary)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+                                    onClick={() => setHiddenDashboardLineIds(hiddenDashboardLineIds.size === 0 ? new Set(lines.map(l => l.id)) : new Set())}
+                                >
+                                    {hiddenDashboardLineIds.size === 0 ? 'Hide all' : 'Show all'}
+                                </button>
+                            </div>
+                            {lines.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No lines configured.</div>}
+                            {lines.map(line => (
+                                <label key={line.id} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 9, fontSize: 13 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={!hiddenDashboardLineIds.has(line.id)}
+                                        onChange={() => toggleLine(line.id)}
+                                        style={{ width: 14, height: 14, accentColor: line.color, cursor: 'pointer' }}
+                                    />
+                                    <div style={{ width: 14, height: 14, borderRadius: '50%', background: line.color, flexShrink: 0 }} />
+                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{line.name}</span>
+                                </label>
+                            ))}
+                        </div>
+
                     </div>
                 </div>
             </div>
