@@ -15,6 +15,7 @@ import {
     buildDefaultRecommendation,
     buildOverviewMetrics,
     buildPathWeatherReport,
+    findBestRoute,
     formatEstimatedTime,
     planDeliveryOperation,
 } from './services/operations.js';
@@ -554,42 +555,117 @@ function buildFallbackDispatchPlan(prompt, stations) {
     };
 }
 
-function buildDemoDeliveryScenario(scenario = 'random') {
-    const templates = {
-        'bad-path': {
-            payload: 'Demo urgent blood products',
-            origin: 'Chibougamau Hub',
-            destination: 'Whapmagoostui',
-            priority: 'Urgent',
-            route: ['Chibougamau Hub', 'Mistissini', 'Nemaska', 'Waskaganish', 'Eastmain', 'Wemindji', 'Chisasibi', 'Whapmagoostui'],
-            reasoning: 'Demo scenario: the mission is staged on a weather-affected corridor so operators can review insights and manually reroute it.',
-        },
-        'good-path': {
-            payload: 'Demo vaccine restock',
-            origin: 'Chibougamau Hub',
-            destination: 'Whapmagoostui',
-            priority: 'Routine',
-            route: ['Chibougamau Hub', 'LaGrande Relay', 'Radisson', 'Whapmagoostui'],
-            reasoning: 'Demo scenario: the mission is already using the preferred northern corridor.',
-        },
-    };
+function buildAvoidCombinations(route = []) {
+    const internalStops = route.slice(1, -1);
+    const combinations = [];
 
+    internalStops.forEach((stationId, index) => {
+        combinations.push([stationId]);
+        for (let secondIndex = index + 1; secondIndex < internalStops.length; secondIndex += 1) {
+            combinations.push([stationId, internalStops[secondIndex]]);
+        }
+    });
+
+    return combinations;
+}
+
+function findDemoRoutePair(stations = [], lines = [], weatherByStation = {}) {
+    const stationsById = Object.fromEntries(stations.map((station) => [station.id, station]));
+    const origins = stations.filter((station) => station.type === 'distribution');
+    const destinations = stations.filter((station) => station.type === 'pick_up');
+    const candidateOrigins = origins.length > 0 ? origins : stations;
+    const candidateDestinations = destinations.length > 0 ? destinations : stations;
+
+    let bestPair = null;
+
+    candidateOrigins.forEach((origin) => {
+        candidateDestinations.forEach((destination) => {
+            if (!origin?.id || !destination?.id || origin.id === destination.id) return;
+
+            const bestRoute = findBestRoute({
+                origin: origin.id,
+                destination: destination.id,
+                lines,
+                stationsById,
+                weatherByStation,
+                mode: 'automatic',
+            });
+
+            if (bestRoute.length < 3) return;
+
+            let alternateRoute = [];
+            buildAvoidCombinations(bestRoute).forEach((avoidStations) => {
+                const candidateRoute = findBestRoute({
+                    origin: origin.id,
+                    destination: destination.id,
+                    lines,
+                    stationsById,
+                    weatherByStation,
+                    avoidStations,
+                    mode: 'automatic',
+                });
+
+                if (
+                    candidateRoute.length > bestRoute.length
+                    && JSON.stringify(candidateRoute) !== JSON.stringify(bestRoute)
+                    && candidateRoute[0] === origin.id
+                    && candidateRoute[candidateRoute.length - 1] === destination.id
+                    && (alternateRoute.length === 0 || candidateRoute.length > alternateRoute.length)
+                ) {
+                    alternateRoute = candidateRoute;
+                }
+            });
+
+            if (!alternateRoute.length) return;
+
+            const score = alternateRoute.length - bestRoute.length;
+            if (!bestPair || score > bestPair.score) {
+                bestPair = {
+                    origin: origin.id,
+                    destination: destination.id,
+                    bestRoute,
+                    alternateRoute,
+                    score,
+                };
+            }
+        });
+    });
+
+    return bestPair;
+}
+
+function buildDemoDeliveryScenario({ scenario = 'random', stations = [], lines = [], weatherByStation = {} }) {
     const normalizedScenario = scenario === 'random'
         ? (Math.random() > 0.5 ? 'bad-path' : 'good-path')
         : scenario;
-    const template = templates[normalizedScenario] || templates['bad-path'];
+    const routePair = findDemoRoutePair(stations, lines, weatherByStation);
+
+    if (!routePair) {
+        throw new Error('A demo bad-path mission requires at least one origin/destination pair with an alternate route in the current DB.');
+    }
+
+    const route = normalizedScenario === 'bad-path'
+        ? routePair.alternateRoute
+        : routePair.bestRoute;
+    const priority = normalizedScenario === 'bad-path' ? 'Urgent' : 'Routine';
+    const payload = normalizedScenario === 'bad-path'
+        ? 'Demo urgent blood products'
+        : 'Demo vaccine restock';
+    const reasoning = normalizedScenario === 'bad-path'
+        ? `Demo scenario: the mission is intentionally staged on a longer valid corridor from ${routePair.origin} to ${routePair.destination} so manual reroute can move it onto the preferred path.`
+        : `Demo scenario: the mission is already using the preferred corridor from ${routePair.origin} to ${routePair.destination}.`;
 
     return {
         scenario: normalizedScenario,
-        payload: template.payload,
-        origin: template.origin,
-        destination: template.destination,
-        priority: template.priority,
+        payload,
+        origin: routePair.origin,
+        destination: routePair.destination,
+        priority,
         status: 'READY_TO_LAUNCH',
         currentLeg: 0,
-        lastStation: template.origin,
-        route: template.route,
-        reasoning: template.reasoning,
+        lastStation: routePair.origin,
+        route,
+        reasoning,
         solanaTx: `demo_${Math.random().toString(36).slice(2, 10)}`,
     };
 }
@@ -931,8 +1007,13 @@ app.post('/api/deliveries', async (req, res) => {
 app.post('/api/demo/deliveries', async (req, res) => {
     try {
         const scenario = String(req.body?.scenario || 'random').trim().toLowerCase();
-        const demoInput = buildDemoDeliveryScenario(scenario);
         const { stations, lines, weatherByStation } = await getRoutingContext();
+        const demoInput = buildDemoDeliveryScenario({
+            scenario,
+            stations,
+            lines,
+            weatherByStation,
+        });
         const planned = planDeliveryOperation({
             deliveryInput: demoInput,
             stations,

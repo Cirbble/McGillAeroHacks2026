@@ -962,8 +962,8 @@ export default function AdminDashboard() {
                 tone: result.scenario === 'bad-path' ? 'warning' : 'success',
                 title: result.scenario === 'bad-path' ? 'Bad-path demo created' : 'Demo mission created',
                 detail: result.scenario === 'bad-path'
-                    ? 'This mission was created on a weather-affected corridor so Gemini, Snowflake, and manual reroute can react to it.'
-                    : 'This mission was created on a stable corridor for comparison against the bad-path scenario.',
+                    ? 'This mission was created on a longer valid corridor from your current DB so Gemini, Snowflake, and manual reroute can react to it.'
+                    : 'This mission was created on the preferred corridor from your current DB for comparison against the bad-path scenario.',
             });
         } catch (err) {
             setRerouteDecision({
