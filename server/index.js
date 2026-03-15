@@ -13,10 +13,12 @@ import {
     DELIVERY_STATUSES,
     buildAdminNotifications,
     buildDefaultRecommendation,
+    buildDroneRelocationReport,
     buildOverviewMetrics,
     buildPathWeatherReport,
     findBestRoute,
     formatEstimatedTime,
+    planDroneRelocation,
     planDeliveryOperation,
 } from './services/operations.js';
 import { buildWeatherIndex, getWeatherSnapshots } from './services/weather.js';
@@ -270,6 +272,50 @@ function normalizeEvents(events = []) {
         : [];
 }
 
+function buildDronePayload(payload = {}) {
+    return {
+        id: payload.id,
+        droneId: payload.droneId,
+        name: payload.name,
+        model: payload.model,
+        location: payload.location,
+        battery: Number(payload.battery ?? 100),
+        batteryHealth: Number(payload.batteryHealth ?? 100),
+        status: payload.status || 'ready',
+        target_location: payload.target_location || null,
+        origin_location: payload.origin_location || null,
+        time_of_arrival: payload.time_of_arrival || null,
+        relocationRoute: Array.isArray(payload.relocationRoute) ? payload.relocationRoute.filter(Boolean) : [],
+        recommendedRelocationRoute: Array.isArray(payload.recommendedRelocationRoute) ? payload.recommendedRelocationRoute.filter(Boolean) : [],
+        relocationDistanceKm: payload.relocationDistanceKm ?? null,
+        relocationRemainingDistanceKm: payload.relocationRemainingDistanceKm ?? payload.relocationDistanceKm ?? null,
+        relocationRouteState: payload.relocationRouteState || 'CLEAR',
+        relocationWeatherState: payload.relocationWeatherState || 'CLEAR',
+        relocationWarnings: Array.isArray(payload.relocationWarnings) ? payload.relocationWarnings : [],
+        relocationRecommendedAction: payload.relocationRecommendedAction || '',
+        relocationRerouteCount: Number(payload.relocationRerouteCount || 0),
+        lastRelocationReroutedAt: payload.lastRelocationReroutedAt ? new Date(payload.lastRelocationReroutedAt) : null,
+        assignment: payload.assignment || null,
+        speed: Number(payload.speed || 0),
+    };
+}
+
+function clearDroneRelocationState(drone) {
+    return {
+        ...drone,
+        relocationRoute: [],
+        recommendedRelocationRoute: [],
+        relocationDistanceKm: null,
+        relocationRemainingDistanceKm: null,
+        relocationRouteState: 'CLEAR',
+        relocationWeatherState: 'CLEAR',
+        relocationWarnings: [],
+        relocationRecommendedAction: '',
+        relocationRerouteCount: 0,
+        lastRelocationReroutedAt: null,
+    };
+}
+
 function buildDeliveryPayload(payload) {
     const estimatedMinutes = Number(payload.estimated_time_minutes || payload.estimatedMinutes || 120);
     const route = Array.isArray(payload.route) ? payload.route.filter(Boolean) : [];
@@ -360,8 +406,74 @@ async function syncOperationalDeliveries(deliveryDocs, stations, lines, weatherB
     return serialized.sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
 }
 
+async function syncOperationalDrones(droneDocs, stations, lines, weatherByStation) {
+    return droneDocs.map((droneDoc) => {
+        const current = buildDronePayload(droneDoc);
+
+        if (current.status !== 'relocating' || !current.target_location) {
+            return current;
+        }
+
+        try {
+            const planned = planDroneRelocation({
+                droneInput: current,
+                stations,
+                lines,
+                weatherByStation,
+                mode: 'automatic',
+            });
+
+            return {
+                ...current,
+                ...planned,
+                relocationReport: buildDroneRelocationReport(planned, weatherByStation),
+            };
+        } catch (err) {
+            return {
+                ...current,
+                relocationRouteState: 'BLOCKED',
+                relocationWeatherState: 'SEVERE',
+                relocationWarnings: [{
+                    stationId: current.target_location,
+                    severity: 'SEVERE',
+                    title: 'Relocation route unavailable',
+                    detail: err.message,
+                    issues: [err.message],
+                    summary: err.message,
+                }],
+                relocationRecommendedAction: err.message,
+                relocationReport: {
+                    droneId: current.id,
+                    routeState: 'BLOCKED',
+                    statusTone: 'danger',
+                    headline: 'Relocation route unavailable',
+                    summary: err.message,
+                    operationalEffect: 'The drone cannot continue on a connected corridor under the current graph and weather conditions.',
+                    severeCount: 1,
+                    unstableCount: 0,
+                    watchCount: 0,
+                    impactedStops: 1,
+                    routeDistanceKm: current.relocationDistanceKm ?? null,
+                    remainingDistanceKm: current.relocationRemainingDistanceKm ?? current.relocationDistanceKm ?? null,
+                    routePreview: `${current.origin_location || current.location} → ${current.target_location}`,
+                    routeStops: Array.isArray(current.relocationRoute) ? current.relocationRoute.length : 0,
+                    rerouteActive: false,
+                    manualRerouteSuggested: false,
+                    manualRerouteHint: 'No safer relocation corridor is currently available.',
+                    recommendedAction: err.message,
+                    topWarning: {
+                        stationId: current.target_location,
+                        detail: err.message,
+                    },
+                    weatherSignals: [],
+                },
+            };
+        }
+    });
+}
+
 async function buildOperationalOverview() {
-    const [deliveryDocs, stations, drones, lines] = await Promise.all([
+    const [deliveryDocs, stations, droneDocs, lines] = await Promise.all([
         Delivery.find({}).sort({ createdAt: -1 }),
         Station.find({}, '-_id -__v -createdAt -updatedAt').lean(),
         Drone.find({}, '-_id -__v -createdAt -updatedAt').lean(),
@@ -372,6 +484,7 @@ async function buildOperationalOverview() {
     const weatherStations = [...weather.stations].sort((left, right) => right.riskScore - left.riskScore);
     const weatherByStation = buildWeatherIndex(weatherStations);
     const deliveries = await syncOperationalDeliveries(deliveryDocs, stations, lines, weatherByStation);
+    const drones = await syncOperationalDrones(droneDocs, stations, lines, weatherByStation);
     const metrics = buildOverviewMetrics({ deliveries, stations, weatherStations });
     const notifications = buildAdminNotifications(deliveries);
     const recommendation = buildDefaultRecommendation({ notifications, metrics, weatherStations });
@@ -850,6 +963,16 @@ app.delete('/api/stations/:id', async (req, res) => {
                 drone.time_of_arrival = null;
                 drone.speed = 0;
                 drone.assignment = null;
+                drone.relocationRoute = [];
+                drone.recommendedRelocationRoute = [];
+                drone.relocationDistanceKm = null;
+                drone.relocationRemainingDistanceKm = null;
+                drone.relocationRouteState = 'CLEAR';
+                drone.relocationWeatherState = 'CLEAR';
+                drone.relocationWarnings = [];
+                drone.relocationRecommendedAction = '';
+                drone.relocationRerouteCount = 0;
+                drone.lastRelocationReroutedAt = null;
                 if (['on_route', 'relocating'].includes(drone.status)) {
                     drone.status = 'ready';
                 }
@@ -857,6 +980,14 @@ app.delete('/api/stations/:id', async (req, res) => {
 
             if (drone.origin_location === stationId) {
                 drone.origin_location = null;
+            }
+
+            if (Array.isArray(drone.relocationRoute) && drone.relocationRoute.includes(stationId)) {
+                drone.relocationRoute = drone.relocationRoute.filter((routeStationId) => routeStationId !== stationId);
+            }
+
+            if (Array.isArray(drone.recommendedRelocationRoute) && drone.recommendedRelocationRoute.includes(stationId)) {
+                drone.recommendedRelocationRoute = drone.recommendedRelocationRoute.filter((routeStationId) => routeStationId !== stationId);
             }
 
             await drone.save();
@@ -912,15 +1043,228 @@ app.patch('/api/drones/:id', async (req, res) => {
     try {
         const drone = await Drone.findOne({ id: req.params.id });
         if (!drone) return res.status(404).json({ error: 'Drone not found.' });
-        const fields = ['name', 'model', 'location', 'battery', 'batteryHealth', 'status', 'target_location', 'origin_location', 'time_of_arrival', 'speed', 'assignment'];
+        const fields = [
+            'name',
+            'model',
+            'location',
+            'battery',
+            'batteryHealth',
+            'status',
+            'target_location',
+            'origin_location',
+            'time_of_arrival',
+            'speed',
+            'assignment',
+            'relocationRoute',
+            'recommendedRelocationRoute',
+            'relocationDistanceKm',
+            'relocationRemainingDistanceKm',
+            'relocationRouteState',
+            'relocationWeatherState',
+            'relocationWarnings',
+            'relocationRecommendedAction',
+            'relocationRerouteCount',
+            'lastRelocationReroutedAt',
+        ];
         fields.forEach(f => { if (req.body[f] !== undefined) drone[f] = req.body[f]; });
-        if (req.body.status && !['on_route', 'relocating'].includes(req.body.status)) { drone.target_location = null; drone.origin_location = null; drone.time_of_arrival = null; drone.speed = 0; }
+        if (req.body.status && req.body.status !== 'relocating') {
+            const cleared = clearDroneRelocationState(serializeDoc(drone));
+            [
+                'relocationRoute',
+                'recommendedRelocationRoute',
+                'relocationDistanceKm',
+                'relocationRemainingDistanceKm',
+                'relocationRouteState',
+                'relocationWeatherState',
+                'relocationWarnings',
+                'relocationRecommendedAction',
+                'relocationRerouteCount',
+                'lastRelocationReroutedAt',
+            ].forEach((field) => {
+                drone[field] = cleared[field];
+            });
+        }
+        if (req.body.status && !['on_route', 'relocating'].includes(req.body.status)) {
+            drone.target_location = null;
+            drone.origin_location = null;
+            drone.time_of_arrival = null;
+            drone.speed = 0;
+        }
         await drone.save();
         res.json(serializeDoc(drone));
     } catch (err) {
         sendApiError(res, err);
     }
 });
+
+async function handleDroneRelocate(req, res) {
+    try {
+        const drone = await Drone.findOne({ id: req.params.id });
+        if (!drone) return res.status(404).json({ error: 'Drone not found.' });
+
+        const targetLocation = String(req.body?.targetLocation || req.body?.target_location || '').trim();
+        if (!targetLocation) {
+            return res.status(400).json({ error: 'A relocation target is required.' });
+        }
+
+        const currentDrone = serializeDoc(drone);
+        const { stations, lines, weather, weatherByStation } = await getRoutingContext();
+        const currentLocationStation = stations.find((station) => station.id === currentDrone.location);
+        const fallbackOrigin = currentLocationStation?.id
+            || currentDrone.target_location
+            || currentDrone.origin_location
+            || currentDrone.location;
+        const planned = planDroneRelocation({
+            droneInput: {
+                ...currentDrone,
+                origin_location: fallbackOrigin,
+                target_location: targetLocation,
+                speed: req.body?.speed ?? currentDrone.speed ?? 80,
+            },
+            stations,
+            lines,
+            weatherByStation,
+            mode: 'automatic',
+        });
+
+        [
+            'location',
+            'status',
+            'target_location',
+            'origin_location',
+            'time_of_arrival',
+            'relocationRoute',
+            'recommendedRelocationRoute',
+            'relocationDistanceKm',
+            'relocationRemainingDistanceKm',
+            'relocationRouteState',
+            'relocationWeatherState',
+            'relocationWarnings',
+            'relocationRecommendedAction',
+            'relocationRerouteCount',
+            'lastRelocationReroutedAt',
+            'assignment',
+            'speed',
+        ].forEach((field) => {
+            drone.set(field, planned[field]);
+        });
+
+        await drone.save();
+        const serializedDrone = serializeDoc(drone);
+        res.json({
+            drone: serializedDrone,
+            relocationReport: buildDroneRelocationReport(serializedDrone, weatherByStation),
+            decision: {
+                status: 'planned',
+                summary: 'Relocation dispatched',
+                detail: `Drone ${serializedDrone.id} is now following ${planned.relocationRoute.length}-stop corridor to ${serializedDrone.target_location}.`,
+            },
+            weather: {
+                updatedAt: weather.updatedAt,
+                source: weather.source,
+                stations: weather.stations,
+            },
+        });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+}
+
+async function handleDroneReroute(req, res) {
+    try {
+        const drone = await Drone.findOne({ id: req.params.id });
+        if (!drone) return res.status(404).json({ error: 'Drone not found.' });
+
+        const currentDrone = serializeDoc(drone);
+        if (currentDrone.status !== 'relocating' || !currentDrone.target_location) {
+            return res.status(400).json({
+                error: 'Only relocating drones can be rerouted.',
+                decision: {
+                    status: 'rejected',
+                    summary: 'Drone reroute rejected',
+                    detail: 'The selected drone is not currently relocating on a corridor.',
+                },
+            });
+        }
+
+        const { stations, lines, weather, weatherByStation } = await getRoutingContext();
+        const planned = planDroneRelocation({
+            droneInput: currentDrone,
+            stations,
+            lines,
+            weatherByStation,
+            mode: 'manual',
+            avoidStationIds: Array.isArray(req.body?.avoidStationIds) ? req.body.avoidStationIds : [],
+        });
+
+        const currentRoute = Array.isArray(currentDrone.relocationRoute) ? currentDrone.relocationRoute : [];
+        const routeChanged = JSON.stringify(planned.relocationRoute) !== JSON.stringify(currentRoute);
+        if (!routeChanged) {
+            return res.json({
+                drone: currentDrone,
+                relocationReport: buildDroneRelocationReport(currentDrone, weatherByStation),
+                decision: {
+                    status: planned.decisionStatus || 'rejected',
+                    summary: planned.decisionSummary || 'Drone reroute rejected',
+                    detail: planned.decisionDetail || 'No relocation route change was applied.',
+                    bestAvailableRoute: planned.recommendedRelocationRoute || currentRoute,
+                },
+                weather: {
+                    updatedAt: weather.updatedAt,
+                    source: weather.source,
+                    stations: weather.stations,
+                },
+            });
+        }
+
+        [
+            'location',
+            'status',
+            'target_location',
+            'origin_location',
+            'time_of_arrival',
+            'relocationRoute',
+            'recommendedRelocationRoute',
+            'relocationDistanceKm',
+            'relocationRemainingDistanceKm',
+            'relocationRouteState',
+            'relocationWeatherState',
+            'relocationWarnings',
+            'relocationRecommendedAction',
+            'relocationRerouteCount',
+            'lastRelocationReroutedAt',
+            'assignment',
+            'speed',
+        ].forEach((field) => {
+            drone.set(field, planned[field]);
+        });
+
+        await drone.save();
+
+        const serializedDrone = serializeDoc(drone);
+        res.json({
+            drone: serializedDrone,
+            relocationReport: buildDroneRelocationReport(serializedDrone, weatherByStation),
+            decision: {
+                status: planned.decisionStatus || 'rerouted',
+                summary: planned.decisionSummary || 'Drone reroute approved',
+                detail: planned.decisionDetail || `Relocation updated to ${planned.relocationRoute.join(' → ')}.`,
+                bestAvailableRoute: planned.recommendedRelocationRoute || planned.relocationRoute,
+            },
+            weather: {
+                updatedAt: weather.updatedAt,
+                source: weather.source,
+                stations: weather.stations,
+            },
+        });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+}
+
+app.post('/api/drones/:id/relocate', handleDroneRelocate);
+
+app.post('/api/drones/:id/reroute', handleDroneReroute);
 
 app.delete('/api/drones/:id', async (req, res) => {
     try {

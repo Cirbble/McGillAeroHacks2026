@@ -260,6 +260,50 @@ export const useStore = create((set, get) => ({
         return drones;
     },
 
+    relocateDrone: async (id, payload = {}) => {
+        const result = await requestJson(`/api/drones/${id}/relocate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        set((state) => ({
+            drones: state.drones.map((drone) => (
+                drone.id === id ? { ...drone, ...result.drone, relocationReport: result.relocationReport } : drone
+            )),
+            opsOverview: state.opsOverview ? {
+                ...state.opsOverview,
+                drones: state.opsOverview.drones.map((drone) => (
+                    drone.id === id ? { ...drone, ...result.drone, relocationReport: result.relocationReport } : drone
+                )),
+            } : state.opsOverview,
+        }));
+
+        return result;
+    },
+
+    rerouteDrone: async (id, payload = {}) => {
+        const result = await requestJson(`/api/drones/${id}/reroute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        set((state) => ({
+            drones: state.drones.map((drone) => (
+                drone.id === id ? { ...drone, ...result.drone, relocationReport: result.relocationReport } : drone
+            )),
+            opsOverview: state.opsOverview ? {
+                ...state.opsOverview,
+                drones: state.opsOverview.drones.map((drone) => (
+                    drone.id === id ? { ...drone, ...result.drone, relocationReport: result.relocationReport } : drone
+                )),
+            } : state.opsOverview,
+        }));
+
+        return result;
+    },
+
     addDrone: async (droneData) => {
         const drone = await requestJson('/api/drones', {
             method: 'POST',

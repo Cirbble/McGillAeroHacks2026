@@ -880,3 +880,295 @@ export function buildPathWeatherReport(delivery = null, weatherByStation = {}) {
         ].filter(Boolean),
     };
 }
+
+function buildDroneManualDecision({
+    shouldUseReroute,
+    currentRouteIsBest,
+    primaryAssessment,
+    currentRoute,
+    bestAvailableRoute,
+    nextRoute,
+}) {
+    const currentWarning = primaryAssessment.warnings[0] || null;
+
+    if (shouldUseReroute) {
+        const reason = currentWarning
+            ? `${currentWarning.stationId} is degrading the active relocation corridor. ${currentWarning.detail}`
+            : 'A safer relocation corridor is available under current conditions.';
+
+        return {
+            decisionStatus: 'rerouted',
+            decisionSummary: 'Drone reroute approved',
+            decisionDetail: `${reason} New relocation path: ${formatRoutePreview(nextRoute)}.`,
+        };
+    }
+
+    if (currentRouteIsBest) {
+        const detail = currentWarning
+            ? `No relocation change applied. The drone already matches the safest available corridor. Highest remaining risk: ${currentWarning.stationId}. ${currentWarning.detail}`
+            : 'No relocation change applied. The drone already matches the safest available corridor.';
+
+        return {
+            decisionStatus: 'rejected',
+            decisionSummary: 'Drone reroute rejected',
+            decisionDetail: detail,
+        };
+    }
+
+    return {
+        decisionStatus: 'unavailable',
+        decisionSummary: 'Drone reroute unavailable',
+        decisionDetail: `No better relocation corridor is available right now. The drone remains on ${formatRoutePreview(currentRoute)}. Best available option remains ${formatRoutePreview(bestAvailableRoute)}.`,
+    };
+}
+
+function buildRelocationEta(routeDistanceKm, speedKph = 80, routeStops = 0) {
+    if (Number.isFinite(Number(routeDistanceKm)) && Number(routeDistanceKm) > 0 && Number(speedKph) > 0) {
+        return Math.max(12, Math.round((Number(routeDistanceKm) / Number(speedKph)) * 60));
+    }
+
+    return Math.max(14, Math.max(1, routeStops - 1) * 22);
+}
+
+export function planDroneRelocation({
+    droneInput = {},
+    stations = [],
+    lines = [],
+    weatherByStation = {},
+    mode = 'automatic',
+    avoidStationIds = [],
+}) {
+    const stationsById = Object.fromEntries(stations.map((station) => [station.id, station]));
+    const origin = droneInput.origin_location || droneInput.location;
+    const destination = droneInput.target_location;
+
+    if (!origin || !destination) {
+        throw new Error('Drone relocation requires both an origin node and a target node.');
+    }
+
+    if (!stationsById[origin]) {
+        throw new Error(`Origin node ${origin} is not configured in the corridor.`);
+    }
+
+    if (!stationsById[destination]) {
+        throw new Error(`Target node ${destination} is not configured in the corridor.`);
+    }
+
+    const requestedRoute = Array.isArray(droneInput.relocationRoute)
+        ? droneInput.relocationRoute.filter(Boolean)
+        : [];
+    const validRequestedRoute = requestedRoute.length > 1
+        && requestedRoute[0] === origin
+        && requestedRoute[requestedRoute.length - 1] === destination
+        && isRouteSegmentValid(requestedRoute, lines)
+            ? requestedRoute
+            : [];
+
+    const generatedPrimaryPath = findBestRoute({
+        origin,
+        destination,
+        lines,
+        stationsById,
+        weatherByStation,
+        mode: 'automatic',
+    });
+
+    const primaryPath = validRequestedRoute.length > 0 ? validRequestedRoute : generatedPrimaryPath;
+    if (primaryPath.length === 0) {
+        throw new Error(`No connected corridor route is available from ${origin} to ${destination}.`);
+    }
+
+    const bestAvailablePath = generatedPrimaryPath.length > 0 ? generatedPrimaryPath : primaryPath;
+    const primaryAssessment = assessRoute(primaryPath, stationsById, weatherByStation);
+    const currentRouteIsBest = routesMatch(primaryPath, bestAvailablePath);
+
+    const rerouteAvoidSets = [];
+    const pushAvoidSet = (stationIds = []) => {
+        const normalized = uniqueList(
+            stationIds.filter((stationId) => (
+                stationId
+                && stationId !== origin
+                && stationId !== destination
+            ))
+        );
+
+        if (
+            normalized.length > 0
+            && !rerouteAvoidSets.some((existing) => routesMatch(existing, normalized))
+        ) {
+            rerouteAvoidSets.push(normalized);
+        }
+    };
+
+    pushAvoidSet([
+        ...avoidStationIds,
+        ...primaryAssessment.warnings
+            .filter((warning) => ['WATCH', 'UNSTABLE', 'SEVERE'].includes(warning.severity))
+            .map((warning) => warning.stationId),
+    ]);
+
+    let reroutePath = [];
+    for (const avoidStations of rerouteAvoidSets) {
+        const candidatePath = findBestRoute({
+            origin,
+            destination,
+            lines,
+            stationsById,
+            weatherByStation,
+            avoidStations,
+            mode: mode === 'manual' ? 'strict' : 'automatic',
+        });
+
+        if (candidatePath.length > 0 && !routesMatch(candidatePath, primaryPath)) {
+            reroutePath = candidatePath;
+            break;
+        }
+    }
+
+    const alternatePath = reroutePath.length > 0
+        ? reroutePath
+        : (!currentRouteIsBest ? bestAvailablePath : []);
+    const hasAlternateRoute = alternatePath.length > 0 && !routesMatch(alternatePath, primaryPath);
+    const shouldUseReroute = mode === 'manual' && hasAlternateRoute;
+    const activePath = shouldUseReroute ? alternatePath : primaryPath;
+    const routeAssessment = assessRoute(activePath, stationsById, weatherByStation);
+    const routeDistance = summarizeRouteDistance({
+        route: activePath,
+        stationsById,
+        lastStation: origin,
+        currentLeg: 0,
+    });
+    const speed = Number(droneInput.speed || 80) || 80;
+    const etaMinutes = buildRelocationEta(routeDistance.routeDistanceKm, speed, activePath.length);
+
+    const relocationRecommendedAction = routeAssessment.routeState === 'BLOCKED'
+        ? hasAlternateRoute
+            ? 'Pause the current relocation and approve the alternate corridor if the repositioning must continue.'
+            : 'Pause the relocation until weather improves on the connected corridor.'
+        : shouldUseReroute
+            ? 'Manual reroute approved. Continue repositioning on the updated corridor.'
+            : hasAlternateRoute && primaryAssessment.routeState !== 'CLEAR'
+                ? 'The current relocation corridor is weather-affected. Review the alternate path and reroute the drone if repositioning must continue.'
+                : routeAssessment.routeState === 'WATCH'
+                    ? 'Relocation can continue, but keep the flagged nodes under operator watch.'
+                    : 'Relocation corridor is clear to proceed.';
+
+    const manualDecision = mode === 'manual'
+        ? buildDroneManualDecision({
+            shouldUseReroute,
+            currentRouteIsBest,
+            primaryAssessment,
+            currentRoute: primaryPath,
+            bestAvailableRoute: bestAvailablePath,
+            nextRoute: activePath,
+        })
+        : { decisionStatus: null, decisionSummary: null, decisionDetail: null };
+
+    return {
+        ...droneInput,
+        status: 'relocating',
+        location: `En route to ${destination}`,
+        origin_location: origin,
+        target_location: destination,
+        speed,
+        time_of_arrival: formatEstimatedTime(etaMinutes),
+        assignment: null,
+        relocationRoute: activePath,
+        recommendedRelocationRoute: hasAlternateRoute && !shouldUseReroute ? alternatePath : activePath,
+        relocationDistanceKm: routeDistance.routeDistanceKm,
+        relocationRemainingDistanceKm: routeDistance.remainingDistanceKm,
+        relocationRouteState: shouldUseReroute ? 'REROUTED' : routeAssessment.routeState,
+        relocationWeatherState: routeAssessment.weatherState,
+        relocationWarnings: routeAssessment.warnings,
+        relocationRecommendedAction,
+        relocationRerouteCount: Number(droneInput.relocationRerouteCount || 0) + (shouldUseReroute ? 1 : 0),
+        lastRelocationReroutedAt: shouldUseReroute ? new Date() : droneInput.lastRelocationReroutedAt || null,
+        decisionStatus: manualDecision.decisionStatus,
+        decisionSummary: manualDecision.decisionSummary,
+        decisionDetail: manualDecision.decisionDetail,
+    };
+}
+
+export function buildDroneRelocationReport(drone = null, weatherByStation = {}) {
+    if (!drone || drone.status !== 'relocating' || !Array.isArray(drone.relocationRoute) || drone.relocationRoute.length === 0) {
+        return null;
+    }
+
+    const route = drone.relocationRoute.filter(Boolean);
+    const pathSnapshots = route
+        .map((stationId) => ({
+            stationId,
+            snapshot: weatherByStation[stationId] || null,
+        }))
+        .filter((entry) => entry.snapshot);
+    const warnings = Array.isArray(drone.relocationWarnings) ? drone.relocationWarnings : [];
+    const severeCount = warnings.filter((warning) => warning.severity === 'SEVERE').length;
+    const unstableCount = warnings.filter((warning) => warning.severity === 'UNSTABLE').length;
+    const watchCount = warnings.filter((warning) => warning.severity === 'WATCH').length;
+    const maxGustKph = pathSnapshots.reduce((max, entry) => Math.max(max, Number(entry.snapshot.windGustKph || 0)), 0);
+    const lowestVisibilityKm = pathSnapshots.reduce((min, entry) => (
+        Math.min(min, Number(entry.snapshot.visibilityKm ?? Number.POSITIVE_INFINITY))
+    ), Number.POSITIVE_INFINITY);
+    const coldestTempC = pathSnapshots.reduce((min, entry) => (
+        Math.min(min, Number(entry.snapshot.tempC ?? Number.POSITIVE_INFINITY))
+    ), Number.POSITIVE_INFINITY);
+    const topWarning = warnings[0] || null;
+    const routeState = drone.relocationRouteState || 'CLEAR';
+    const statusTone = routeState === 'BLOCKED'
+        ? 'danger'
+        : routeState === 'REROUTED' || routeState === 'ADVISORY' || routeState === 'WATCH'
+            ? 'warning'
+            : 'clear';
+    const rerouteActive = routeState === 'REROUTED';
+    const manualRerouteSuggested = Array.isArray(drone.recommendedRelocationRoute)
+        && drone.recommendedRelocationRoute.length > 0
+        && !routesMatch(drone.recommendedRelocationRoute, route)
+        && !rerouteActive;
+
+    const headline = rerouteActive
+        ? `Relocation rerouted around ${topWarning?.stationId || 'weather risk'}`
+        : manualRerouteSuggested
+            ? `Relocation reroute available around ${topWarning?.stationId || 'current weather risk'}`
+            : warnings.length > 0
+                ? `Relocation weather watch for ${drone.id}`
+                : `Relocation corridor is clear for ${drone.id}`;
+
+    const operationalEffect = rerouteActive
+        ? `The drone is currently repositioning on a manually approved ${route.length}-stop alternate corridor.`
+        : manualRerouteSuggested
+            ? `A safer ${drone.recommendedRelocationRoute.length}-stop relocation corridor is available if you approve a reroute.`
+            : warnings.length > 0
+                ? `${warnings.length} relocation stop${warnings.length === 1 ? '' : 's'} require operator attention.`
+                : 'The relocation corridor is operating normally.';
+
+    return {
+        droneId: drone.id,
+        routeState,
+        statusTone,
+        headline,
+        summary: warnings.length > 0
+            ? topWarning.detail
+            : 'No meaningful weather or maintenance risk is active on the relocation corridor.',
+        operationalEffect,
+        severeCount,
+        unstableCount,
+        watchCount,
+        impactedStops: warnings.length,
+        routeDistanceKm: drone.relocationDistanceKm ?? null,
+        remainingDistanceKm: drone.relocationRemainingDistanceKm ?? drone.relocationDistanceKm ?? null,
+        routePreview: route.length > 0 ? `${route[0]} → ${route[route.length - 1]}` : `${drone.origin_location} → ${drone.target_location}`,
+        routeStops: route.length,
+        rerouteActive,
+        manualRerouteSuggested,
+        manualRerouteHint: manualRerouteSuggested
+            ? `Safer alternate available: ${formatRoutePreview(drone.recommendedRelocationRoute)}`
+            : 'Current relocation corridor already matches the best available route.',
+        recommendedAction: drone.relocationRecommendedAction,
+        topWarning,
+        weatherSignals: [
+            maxGustKph > 0 ? `Peak gusts ${Math.round(maxGustKph)} km/h` : null,
+            Number.isFinite(lowestVisibilityKm) ? `Visibility low of ${Number(lowestVisibilityKm.toFixed(1))} km` : null,
+            Number.isFinite(coldestTempC) ? `Coldest point ${Number(coldestTempC.toFixed(1))}°C` : null,
+        ].filter(Boolean),
+    };
+}
