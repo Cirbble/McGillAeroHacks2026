@@ -417,7 +417,8 @@ function buildPathInsightPrompt(context) {
 
     return `You are the Aero'ed route copilot for a medical drone relay mission in Northern Quebec.
 
-Give concise mission-specific guidance for the currently selected path. Focus only on this mission's route, weather exposure, reroute state, and what the operator should do next.
+Give concise mission-specific guidance for the currently selected path. Focus only on this mission's route, weather exposure, reroute state, ETA confidence, and what the operator should do next.
+Every response must mention the current ETA or whether it is likely to slip.
 Return JSON fields named summary, action, and watch. Each field should be one short sentence. Do not use markdown.
 
 MISSION:
@@ -428,6 +429,10 @@ MISSION:
 - ETA: ${context.delivery.estimatedTime}
 - Total route distance: ${context.pathReport.routeDistanceKm ?? 'Unavailable'} km
 - Remaining route distance: ${context.pathReport.remainingDistanceKm ?? 'Unavailable'} km
+- Cruise speed used: ${context.pathReport.cruiseSpeedKph ?? 'Unavailable'} km/h (${context.pathReport.speedSource || 'No source'})
+- Base flight time: ${context.pathReport.baseFlightMinutes ?? 'Unavailable'} minutes
+- Weather delay: ${context.pathReport.weatherDelayMinutes ?? 0} minutes
+- Relay handoff delay: ${context.pathReport.handoffDelayMinutes ?? 0} minutes
 
 PATH WEATHER REPORT:
 - Headline: ${context.pathReport.headline}
@@ -533,6 +538,11 @@ export async function getPathOperationalInsights(context) {
         deliveryId: context.delivery.id,
         status: context.delivery.status,
         route: context.delivery.route,
+        estimatedTime: context.delivery.estimatedTime,
+        estimatedMinutes: context.delivery.estimatedMinutes,
+        cruiseSpeedKph: context.pathReport.cruiseSpeedKph,
+        weatherDelayMinutes: context.pathReport.weatherDelayMinutes,
+        handoffDelayMinutes: context.pathReport.handoffDelayMinutes,
         warnings: context.delivery.routeWarnings,
         recommendedAction: context.pathReport.recommendedAction,
         rerouteActive: context.pathReport.rerouteActive,
@@ -547,26 +557,29 @@ export async function getPathOperationalInsights(context) {
     }
 
     const prompt = buildPathInsightPrompt(context);
+    const etaFallback = context.delivery.estimatedTime
+        ? `ETA ${context.delivery.estimatedTime}. ${context.pathReport.recommendedAction}`
+        : context.pathReport.recommendedAction;
     const fallback = {
         pathReport: context.pathReport,
         gemini: {
             available: false,
             provider: 'gemini',
             model: process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
-            content: context.pathReport.recommendedAction,
+            content: etaFallback,
         },
         snowflake: {
             available: false,
             provider: 'snowflake',
             model: process.env.SNOWFLAKE_CORTEX_MODEL || 'mistral-large2',
-            content: context.pathReport.recommendedAction,
+            content: etaFallback,
         },
     };
 
     const [geminiResult, snowflakeResult] = await Promise.allSettled([
         callGeminiOperatorInsight(prompt, {
             thinkingLevel: 'minimal',
-            fallbackContent: context.pathReport.recommendedAction,
+            fallbackContent: etaFallback,
         }),
         callSnowflakeCortex(buildPathSnowflakeMessages(context), {
             maxCompletionTokens: 180,
@@ -579,17 +592,17 @@ export async function getPathOperationalInsights(context) {
             ? geminiResult.value
             : {
                 ...fallback.gemini,
-                content: formatInsightParts(['Gemini unavailable', context.pathReport.recommendedAction], context.pathReport.recommendedAction),
+                content: formatInsightParts(['Gemini unavailable', etaFallback], etaFallback),
                 error: geminiResult.reason?.message,
             },
         snowflake: snowflakeResult.status === 'fulfilled'
             ? {
                 ...snowflakeResult.value,
-                content: normalizeInsightContent(snowflakeResult.value.content, context.pathReport.recommendedAction),
+                content: normalizeInsightContent(snowflakeResult.value.content, etaFallback),
             }
             : {
                 ...fallback.snowflake,
-                content: formatInsightParts(['Snowflake fallback', context.pathReport.recommendedAction], context.pathReport.recommendedAction),
+                content: formatInsightParts(['Snowflake fallback', etaFallback], etaFallback),
                 error: snowflakeResult.reason?.message,
             },
     };

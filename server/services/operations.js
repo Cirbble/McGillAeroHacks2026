@@ -21,6 +21,12 @@ export const ACTIVE_DELIVERY_STATUSES = new Set([
 ]);
 
 const HIGH_PRIORITY = new Set(['Urgent', 'Emergency']);
+const DEFAULT_DELIVERY_CRUISE_SPEED_KPH = 78;
+const DELIVERY_MODEL_CRUISE_SPEEDS = {
+    'DDC Sparrow': 72,
+    'DDC Robin XL': 68,
+    'DJI FlyCart 30': 58,
+};
 
 function uniqueList(values = []) {
     return [...new Set(values.filter(Boolean))];
@@ -126,6 +132,95 @@ function summarizeRouteDistance({
     return {
         routeDistanceKm,
         remainingDistanceKm,
+    };
+}
+
+function estimateWeatherDelayMinutes(warnings = []) {
+    return warnings.reduce((total, warning) => (
+        total + (warning.severity === 'SEVERE' ? 18 : warning.severity === 'UNSTABLE' ? 10 : 4)
+    ), 0);
+}
+
+function getAssignedDeliveryDrone(deliveryInput = {}, drones = []) {
+    return [...drones]
+        .filter((drone) => drone.assignment && drone.assignment === deliveryInput.id)
+        .sort((left, right) => {
+            const speedDelta = Number(right.speed || 0) - Number(left.speed || 0);
+            if (speedDelta !== 0) return speedDelta;
+            if (left.status === 'on_route' && right.status !== 'on_route') return -1;
+            if (right.status === 'on_route' && left.status !== 'on_route') return 1;
+            return String(left.id || '').localeCompare(String(right.id || ''));
+        })[0] || null;
+}
+
+function resolveDeliveryCruiseProfile(deliveryInput = {}, drones = []) {
+    const assignedDrone = getAssignedDeliveryDrone(deliveryInput, drones);
+    if (assignedDrone) {
+        const liveSpeed = Number(assignedDrone.speed || 0);
+        if (liveSpeed > 0) {
+            return {
+                cruiseSpeedKph: liveSpeed,
+                speedSource: `${assignedDrone.id} live telemetry`,
+            };
+        }
+
+        const modelSpeed = DELIVERY_MODEL_CRUISE_SPEEDS[assignedDrone.model];
+        if (modelSpeed) {
+            return {
+                cruiseSpeedKph: modelSpeed,
+                speedSource: `${assignedDrone.id} model cruise profile`,
+            };
+        }
+    }
+
+    return {
+        cruiseSpeedKph: DEFAULT_DELIVERY_CRUISE_SPEED_KPH,
+        speedSource: assignedDrone
+            ? `${assignedDrone.id} default corridor cruise profile`
+            : 'Corridor default cruise profile',
+    };
+}
+
+function buildDeliveryEtaProfile({
+    deliveryInput = {},
+    route = [],
+    stationsById = {},
+    warnings = [],
+    routeWasRerouted = false,
+    drones = [],
+}) {
+    const remainingRoute = getRemainingRoute(
+        route,
+        deliveryInput.lastStation || deliveryInput.origin,
+        deliveryInput.currentLeg
+    );
+    const remainingLegs = Math.max(1, remainingRoute.length - 1);
+    const remainingDistanceKm = calculateRouteDistanceKm(remainingRoute, stationsById);
+    const { cruiseSpeedKph, speedSource } = resolveDeliveryCruiseProfile(deliveryInput, drones);
+    const baseFlightMinutes = Number.isFinite(Number(remainingDistanceKm)) && Number(cruiseSpeedKph) > 0
+        ? Math.max(12, Math.round((Number(remainingDistanceKm) / Number(cruiseSpeedKph)) * 60))
+        : Math.max(18, remainingLegs * 18);
+    const handoffDelayMinutes = Math.max(0, remainingRoute.length - 2) * 4;
+    const weatherDelayMinutes = estimateWeatherDelayMinutes(warnings);
+    const rerouteCoordinationMinutes = routeWasRerouted ? 8 : 0;
+    const priorityAdjustmentMinutes = HIGH_PRIORITY.has(deliveryInput.priority) ? -4 : 0;
+    const estimatedMinutes = Math.max(
+        22,
+        baseFlightMinutes
+            + handoffDelayMinutes
+            + weatherDelayMinutes
+            + rerouteCoordinationMinutes
+            + priorityAdjustmentMinutes
+    );
+
+    return {
+        estimatedMinutes,
+        estimatedTime: formatEstimatedTime(estimatedMinutes),
+        cruiseSpeedKph,
+        speedSource,
+        baseFlightMinutes,
+        weatherDelayMinutes,
+        handoffDelayMinutes,
     };
 }
 
@@ -391,17 +486,6 @@ export function assessRoute(route = [], stationsById = {}, weatherByStation = {}
     };
 }
 
-function estimateRouteMinutes(route = [], priority = 'Routine', warnings = [], routeWasRerouted = false) {
-    const legs = Math.max(0, route.length - 1);
-    const baseMinutes = legs * 18 + Math.max(0, legs - 1) * 4;
-    const weatherDelay = warnings.reduce((total, warning) => (
-        total + (warning.severity === 'SEVERE' ? 18 : warning.severity === 'UNSTABLE' ? 10 : 4)
-    ), 0);
-    const priorityAdjustment = HIGH_PRIORITY.has(priority) ? -4 : 0;
-    const reroutePenalty = routeWasRerouted ? 10 : 0;
-    return Math.max(22, baseMinutes + weatherDelay + reroutePenalty + priorityAdjustment);
-}
-
 function getExistingPrefix(route = [], lastStation) {
     if (!route.length || !lastStation) return [];
     const stationIndex = route.indexOf(lastStation);
@@ -440,6 +524,7 @@ export function planDeliveryOperation({
     deliveryInput = {},
     stations = [],
     lines = [],
+    drones = [],
     weatherByStation = {},
     mode = 'automatic',
     avoidStationIds = [],
@@ -580,7 +665,14 @@ export function planDeliveryOperation({
         lastStation: sanitized.lastStation || missionStart,
         currentLeg: sanitized.currentLeg,
     });
-    const estimatedMinutes = estimateRouteMinutes(fullRoute, sanitized.priority, routeAssessment.warnings, shouldUseReroute);
+    const etaProfile = buildDeliveryEtaProfile({
+        deliveryInput: sanitized,
+        route: fullRoute,
+        stationsById,
+        warnings: routeAssessment.warnings,
+        routeWasRerouted: shouldUseReroute,
+        drones,
+    });
     const recommendedAction = status === 'REJECTED'
         ? 'Remove this request from the dispatch queue and notify the sender of the policy rejection.'
         : status === 'AWAITING_REVIEW'
@@ -663,9 +755,14 @@ export function planDeliveryOperation({
         decisionDetail: manualDecision.decisionDetail,
         routeDistanceKm,
         remainingDistanceKm,
+        cruiseSpeedKph: etaProfile.cruiseSpeedKph,
+        speedSource: etaProfile.speedSource,
+        baseFlightMinutes: etaProfile.baseFlightMinutes,
+        weatherDelayMinutes: etaProfile.weatherDelayMinutes,
+        handoffDelayMinutes: etaProfile.handoffDelayMinutes,
         reasoning: detailReasoning,
-        estimatedMinutes,
-        estimatedTime: formatEstimatedTime(estimatedMinutes),
+        estimatedMinutes: etaProfile.estimatedMinutes,
+        estimatedTime: etaProfile.estimatedTime,
         totalLegs: Math.max(1, fullRoute.length - 1),
         currentLeg: Number(sanitized.currentLeg || 0),
         manualAttentionRequired: Boolean(sanitized.manualAttentionRequired)
@@ -864,6 +961,14 @@ export function buildPathWeatherReport(delivery = null, weatherByStation = {}) {
         coldestTempC: Number.isFinite(coldestTempC) ? Number(coldestTempC.toFixed(1)) : null,
         routeDistanceKm: delivery.routeDistanceKm ?? null,
         remainingDistanceKm: delivery.remainingDistanceKm ?? delivery.routeDistanceKm ?? null,
+        etaMinutes: delivery.estimatedMinutes ?? null,
+        etaDisplay: delivery.estimatedTime || null,
+        cruiseSpeedKph: delivery.cruiseSpeedKph ?? null,
+        speedSource: delivery.speedSource || 'Corridor default cruise profile',
+        baseFlightMinutes: delivery.baseFlightMinutes ?? null,
+        weatherDelayMinutes: Number(delivery.weatherDelayMinutes || 0),
+        handoffDelayMinutes: Number(delivery.handoffDelayMinutes || 0),
+        weatherClear: warnings.length === 0,
         routePreview: route.length > 0 ? `${route[0]} → ${route[route.length - 1]}` : `${delivery.origin} → ${delivery.destination}`,
         routeStops: route.length,
         rerouteActive,

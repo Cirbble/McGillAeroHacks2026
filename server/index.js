@@ -340,6 +340,11 @@ function buildDeliveryPayload(payload) {
         estimatedMinutes,
         routeDistanceKm: payload.routeDistanceKm ?? null,
         remainingDistanceKm: payload.remainingDistanceKm ?? payload.routeDistanceKm ?? null,
+        cruiseSpeedKph: payload.cruiseSpeedKph ?? null,
+        speedSource: payload.speedSource || '',
+        baseFlightMinutes: payload.baseFlightMinutes ?? null,
+        weatherDelayMinutes: Number(payload.weatherDelayMinutes || 0),
+        handoffDelayMinutes: Number(payload.handoffDelayMinutes || 0),
         weightKg: payload.weightKg ?? payload.weight_kg ?? null,
         routeState: payload.routeState || 'CLEAR',
         weatherState: payload.weatherState || 'CLEAR',
@@ -384,7 +389,7 @@ function buildDeliveryUpdate(current, planned) {
     return buildDeliveryPayload(merged);
 }
 
-async function syncOperationalDeliveries(deliveryDocs, stations, lines, weatherByStation) {
+async function syncOperationalDeliveries(deliveryDocs, stations, lines, weatherByStation, drones = []) {
     const serialized = [];
 
     for (const deliveryDoc of deliveryDocs) {
@@ -393,6 +398,7 @@ async function syncOperationalDeliveries(deliveryDocs, stations, lines, weatherB
             deliveryInput: current,
             stations,
             lines,
+            drones,
             weatherByStation,
             mode: 'automatic',
         });
@@ -483,7 +489,8 @@ async function buildOperationalOverview() {
     const weather = await getWeatherSnapshots(stations);
     const weatherStations = [...weather.stations].sort((left, right) => right.riskScore - left.riskScore);
     const weatherByStation = buildWeatherIndex(weatherStations);
-    const deliveries = await syncOperationalDeliveries(deliveryDocs, stations, lines, weatherByStation);
+    const rawDrones = droneDocs.map((droneDoc) => buildDronePayload(droneDoc));
+    const deliveries = await syncOperationalDeliveries(deliveryDocs, stations, lines, weatherByStation, rawDrones);
     const drones = await syncOperationalDrones(droneDocs, stations, lines, weatherByStation);
     const metrics = buildOverviewMetrics({ deliveries, stations, weatherStations });
     const notifications = buildAdminNotifications(deliveries);
@@ -592,15 +599,17 @@ const GEMINI_DISPATCH_SCHEMA = {
 };
 
 async function getRoutingContext() {
-    const [stations, lines] = await Promise.all([
+    const [stations, lines, drones] = await Promise.all([
         Station.find({}, '-_id -__v -createdAt -updatedAt').lean(),
         Line.find({}, '-_id -__v -createdAt -updatedAt').lean(),
+        Drone.find({}, '-_id -__v -createdAt -updatedAt').lean(),
     ]);
     const weather = await getWeatherSnapshots(stations);
 
     return {
         stations,
         lines,
+        drones: drones.map((drone) => buildDronePayload(drone)),
         weather,
         weatherByStation: buildWeatherIndex(weather.stations),
     };
@@ -1321,11 +1330,12 @@ app.post('/api/dispatch/plan', async (req, res) => {
 
 app.post('/api/deliveries', async (req, res) => {
     try {
-        const { stations, lines, weather, weatherByStation } = await getRoutingContext();
+        const { stations, lines, drones, weather, weatherByStation } = await getRoutingContext();
         const planned = planDeliveryOperation({
             deliveryInput: req.body,
             stations,
             lines,
+            drones,
             weatherByStation,
             mode: 'automatic',
         });
@@ -1353,7 +1363,7 @@ app.post('/api/deliveries', async (req, res) => {
 app.post('/api/demo/deliveries', async (req, res) => {
     try {
         const scenario = String(req.body?.scenario || 'random').trim().toLowerCase();
-        const { stations, lines, weatherByStation } = await getRoutingContext();
+        const { stations, lines, drones, weatherByStation } = await getRoutingContext();
         const demoInput = buildDemoDeliveryScenario({
             scenario,
             stations,
@@ -1364,6 +1374,7 @@ app.post('/api/demo/deliveries', async (req, res) => {
             deliveryInput: demoInput,
             stations,
             lines,
+            drones,
             weatherByStation,
             mode: 'automatic',
         });
@@ -1534,11 +1545,12 @@ app.post('/api/deliveries/:id/reroute', async (req, res) => {
         }
 
         const currentDelivery = serializeDoc(delivery);
-        const { stations, lines, weather, weatherByStation } = await getRoutingContext();
+        const { stations, lines, drones, weather, weatherByStation } = await getRoutingContext();
         const planned = planDeliveryOperation({
             deliveryInput: currentDelivery,
             stations,
             lines,
+            drones,
             weatherByStation,
             mode: 'manual',
             avoidStationIds: Array.isArray(req.body.avoidStationIds) ? req.body.avoidStationIds : [],
@@ -1547,8 +1559,9 @@ app.post('/api/deliveries/:id/reroute', async (req, res) => {
         const currentRoute = Array.isArray(currentDelivery.route) ? currentDelivery.route : [];
         const routeChanged = JSON.stringify(planned.route) !== JSON.stringify(currentRoute);
         if (!routeChanged) {
+            const projectedDelivery = buildDeliveryUpdate(currentDelivery, planned);
             return res.json({
-                delivery: currentDelivery,
+                delivery: projectedDelivery,
                 decision: {
                     status: planned.decisionStatus || 'rejected',
                     summary: planned.decisionSummary || 'Manual reroute rejected',
@@ -1575,6 +1588,11 @@ app.post('/api/deliveries/:id/reroute', async (req, res) => {
             'estimatedMinutes',
             'routeDistanceKm',
             'remainingDistanceKm',
+            'cruiseSpeedKph',
+            'speedSource',
+            'baseFlightMinutes',
+            'weatherDelayMinutes',
+            'handoffDelayMinutes',
             'routeState',
             'weatherState',
             'routeWarnings',

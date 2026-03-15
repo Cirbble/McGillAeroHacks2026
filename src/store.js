@@ -135,7 +135,19 @@ export const useStore = create((set, get) => ({
 
         try {
             const insight = await requestJson(`/api/ops/path-insight/${id}`);
-            set({ pathInsight: insight, pathInsightLoading: false });
+            set((state) => ({
+                pathInsight: insight,
+                pathInsightLoading: false,
+                deliveries: state.deliveries.map((delivery) => (
+                    delivery.id === insight.delivery?.id ? { ...delivery, ...insight.delivery } : delivery
+                )),
+                opsOverview: state.opsOverview ? {
+                    ...state.opsOverview,
+                    deliveries: state.opsOverview.deliveries.map((delivery) => (
+                        delivery.id === insight.delivery?.id ? { ...delivery, ...insight.delivery } : delivery
+                    )),
+                } : state.opsOverview,
+            }));
             return insight;
         } catch (err) {
             set({ pathInsightLoading: false });

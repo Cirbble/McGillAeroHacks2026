@@ -811,8 +811,8 @@ function OverviewWeatherMap({
             } else {
                 div.style.cssText = 'background:rgba(255,255,255,0.92);border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-family:Inter,sans-serif;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,0.08);min-width:180px;';
                 div.innerHTML =
-                    '<div style="font-weight:700;margin-bottom:6px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Radar Overlay</div>' +
-                    '<div style="color:#0f172a;line-height:1.5;">MSC GeoMet radar composite over the selected mission corridor.</div>' +
+                    '<div style="font-weight:700;margin-bottom:6px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Precipitation Radar</div>' +
+                    '<div style="color:#0f172a;line-height:1.5;">MSC GeoMet precipitation radar over the selected mission corridor. Cloud cover requires satellite imagery.</div>' +
                     `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;"><div style="width:22px;height:3px;background:${activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? '#10b981' : '#f59e0b'};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">${activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? 'Manual reroute active' : 'Current mission path'}</span></div>`;
             }
 
@@ -1351,7 +1351,7 @@ export default function AdminDashboard() {
                         <span className="card-header-title"><Signal size={14} /> Selected Route Weather + Routing</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                                {showWeatherOverlay ? 'Live MSC GeoMet radar' : 'Base corridor map'}
+                                {showWeatherOverlay ? 'Live MSC GeoMet precipitation radar' : 'Base corridor map'}
                             </span>
                             <button
                                 type="button"
@@ -1430,6 +1430,21 @@ export default function AdminDashboard() {
                                                 Total route distance: {formatDistanceKm(pathReport.routeDistanceKm)}.
                                                 {' '}
                                                 Remaining from current mission state: {formatDistanceKm(pathReport.remainingDistanceKm)}.
+                                            </div>
+                                        </div>
+                                        <div style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>ETA model</div>
+                                            <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>
+                                                Estimated arrival: {pathReport.etaDisplay || 'Unavailable'}.
+                                                {' '}
+                                                Cruise speed: {pathReport.cruiseSpeedKph ? `${pathReport.cruiseSpeedKph} km/h` : 'Unavailable'} via {pathReport.speedSource || 'route default'}.
+                                            </div>
+                                            <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.6, color: 'var(--text-tertiary)' }}>
+                                                Base flight {Number.isFinite(pathReport.baseFlightMinutes) ? formatMinutes(pathReport.baseFlightMinutes) : 'unavailable'}
+                                                {' · '}
+                                                Weather {pathReport.weatherDelayMinutes > 0 ? `+${formatMinutes(pathReport.weatherDelayMinutes)}` : 'clear'}
+                                                {' · '}
+                                                Handoffs {pathReport.handoffDelayMinutes > 0 ? `+${formatMinutes(pathReport.handoffDelayMinutes)}` : 'none'}
                                             </div>
                                         </div>
                                         <div style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg)' }}>
