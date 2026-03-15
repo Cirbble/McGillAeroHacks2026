@@ -97,6 +97,15 @@ function formatSolanaSignature(signature) {
     return `${signature.slice(0, 8)}...${signature.slice(-8)}`;
 }
 
+function getPreferredStationId(stations = [], selectors = []) {
+    for (const selector of selectors) {
+        const match = stations.find(selector);
+        if (match?.id) return match.id;
+    }
+
+    return stations[0]?.id || '';
+}
+
 function RouteStops({ route = [], currentLeg = 0 }) {
     if (!Array.isArray(route) || route.length === 0) return null;
 
@@ -183,8 +192,8 @@ export default function DistributorPortal() {
     const [aiPrompt, setAiPrompt] = useState('');
     const [payload, setPayload] = useState('');
     const [priority, setPriority] = useState('Routine');
-    const [origin, setOrigin] = useState('Chibougamau Hub');
-    const [destination, setDestination] = useState('Chisasibi');
+    const [origin, setOrigin] = useState('');
+    const [destination, setDestination] = useState('');
     const [selectedDroneId, setSelectedDroneId] = useState(null);
     const [showAllDrones, setShowAllDrones] = useState(true);
     const [confirmAction, setConfirmAction] = useState(null);
@@ -198,10 +207,42 @@ export default function DistributorPortal() {
     const completedDeliveries = deliveries.filter((delivery) => delivery.status === 'DELIVERED').sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt));
     const history = [...deliveries].sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt));
     const selectedDrone = drones.find((drone) => drone.id === selectedDroneId) || null;
-    const distributionStations = stations.filter((station) => station.type === 'distribution');
-    const destinationStations = stations.filter((station) => station.type !== 'distribution');
+    const sortedStations = [...stations].sort((left, right) => left.id.localeCompare(right.id));
+    const distributionStations = sortedStations.filter((station) => station.type === 'distribution');
+    const originStations = sortedStations;
+    const destinationStations = sortedStations.filter((station) => station.id !== origin);
+    const defaultOriginId = getPreferredStationId(originStations, [
+        (station) => station.id === 'Montreal',
+        (station) => station.type === 'distribution',
+    ]);
+    const defaultDestinationId = getPreferredStationId(destinationStations, [
+        (station) => station.id === 'Chisasibi',
+        (station) => station.type === 'pick_up',
+    ]);
     const myDispatchDroneIds = new Set(activeDeliveries.map((delivery) => delivery.assignedDrone).filter(Boolean));
     const mapDrones = showAllDrones ? drones : drones.filter((drone) => myDispatchDroneIds.has(drone.id) || myDispatchDroneIds.has(drone.assignment));
+
+    useEffect(() => {
+        if (!originStations.length) {
+            if (origin !== '') setOrigin('');
+            return;
+        }
+
+        if (!originStations.some((station) => station.id === origin)) {
+            setOrigin(defaultOriginId);
+        }
+    }, [defaultOriginId, origin, originStations]);
+
+    useEffect(() => {
+        if (!destinationStations.length) {
+            if (destination !== '') setDestination('');
+            return;
+        }
+
+        if (!destinationStations.some((station) => station.id === destination)) {
+            setDestination(defaultDestinationId);
+        }
+    }, [defaultDestinationId, destination, destinationStations]);
 
     const runAction = async () => {
         if (!confirmAction) return;
@@ -454,7 +495,7 @@ export default function DistributorPortal() {
                         <div className="card-body">
                             {useAI ? (
                                 <form onSubmit={submitAIDispatch}>
-                                    <textarea className="form-input" rows={5} style={{ resize: 'none', marginBottom: 16 }} placeholder="Example: Send urgent insulin and antibiotics from Chibougamau Hub to Chisasibi tonight." value={aiPrompt} onChange={(event) => setAiPrompt(event.target.value)} />
+                                    <textarea className="form-input" rows={5} style={{ resize: 'none', marginBottom: 16 }} placeholder="Example: Send urgent insulin and antibiotics from Montreal to Chisasibi tonight." value={aiPrompt} onChange={(event) => setAiPrompt(event.target.value)} />
                                     {error && <div className="info-box" style={{ marginBottom: 16, background: 'var(--danger-light)', borderColor: '#fca5a5', color: 'var(--danger)' }}>{error}</div>}
                                     <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={isProcessing || !aiPrompt.trim()}>{isProcessing ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Planning Dispatch...</> : 'Generate Route and Dispatch'}</button>
                                 </form>
@@ -463,8 +504,18 @@ export default function DistributorPortal() {
                                     <label className="form-label">Payload</label>
                                     <input className="form-input" style={{ marginBottom: 16 }} value={payload} onChange={(event) => setPayload(event.target.value)} placeholder="Example: Insulin (5kg)" required />
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-                                        <div><label className="form-label">Origin</label><select className="form-input" value={origin} onChange={(event) => setOrigin(event.target.value)}>{distributionStations.map((station) => <option key={station.id} value={station.id}>{station.id}</option>)}</select></div>
-                                        <div><label className="form-label">Destination</label><select className="form-input" value={destination} onChange={(event) => setDestination(event.target.value)}>{destinationStations.map((station) => <option key={station.id} value={station.id}>{station.id}</option>)}</select></div>
+                                        <div>
+                                            <label className="form-label">Origin</label>
+                                            <select className="form-input" value={origin} onChange={(event) => setOrigin(event.target.value)}>
+                                                {originStations.map((station) => <option key={station.id} value={station.id}>{station.id}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="form-label">Destination</label>
+                                            <select className="form-input" value={destination} onChange={(event) => setDestination(event.target.value)}>
+                                                {destinationStations.map((station) => <option key={station.id} value={station.id}>{station.id}</option>)}
+                                            </select>
+                                        </div>
                                     </div>
                                     <label className="form-label">Priority</label>
                                     <select className="form-input" style={{ marginBottom: 16 }} value={priority} onChange={(event) => setPriority(event.target.value)}><option value="Routine">Routine</option><option value="Urgent">Urgent</option><option value="Emergency">Emergency</option></select>

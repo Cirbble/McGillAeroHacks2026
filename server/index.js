@@ -391,6 +391,8 @@ function buildDeliveryPayload(payload) {
     const route = Array.isArray(payload.route) ? payload.route.filter(Boolean) : [];
     const totalLegs = Number(payload.estimated_legs || payload.totalLegs || Math.max(route.length - 1, 1));
     const currentLeg = Number(payload.currentLeg ?? 0);
+    const inferredOrigin = payload.origin || route[0] || '';
+    const inferredDestination = payload.destination || route[route.length - 1] || '';
     const solanaLedger = buildSolanaLedgerMetadata(payload);
     const createdAt = payload.createdAt
         || payload.events?.[0]?.timestamp
@@ -400,8 +402,8 @@ function buildDeliveryPayload(payload) {
     return {
         id: payload.id,
         payload: payload.payload,
-        origin: payload.origin || 'Chibougamau Hub',
-        destination: payload.destination,
+        origin: inferredOrigin,
+        destination: inferredDestination,
         priority: payload.priority || 'Routine',
         assignedDrone: payload.assignedDrone || payload.assignment || null,
         requestedBy: payload.requestedBy || '',
@@ -414,7 +416,7 @@ function buildDeliveryPayload(payload) {
         status: DELIVERY_STATUSES.includes(payload.status) ? payload.status : 'PENDING_DISPATCH',
         currentLeg,
         totalLegs,
-        lastStation: payload.lastStation || payload.origin || 'Chibougamau Hub',
+        lastStation: payload.lastStation || inferredOrigin || route[Math.min(currentLeg, Math.max(route.length - 1, 0))] || '',
         eta: payload.eta ? new Date(payload.eta) : generateETA(estimatedMinutes),
         ...solanaLedger,
         route,
@@ -726,6 +728,10 @@ function buildDispatchPlanningPrompt(userPrompt, stations, weatherStations) {
         })
         .join('\n');
 
+    const origins = stations
+        .filter((station) => station.type === 'distribution')
+        .map((station) => station.id)
+        .join(', ');
     const destinations = stations
         .filter((station) => station.type !== 'distribution')
         .map((station) => station.id)
@@ -741,17 +747,44 @@ ${relevantStations}
 AVAILABLE DESTINATIONS:
 ${destinations}
 
+AVAILABLE ORIGINS:
+${origins}
+
 Return only JSON that matches the required schema.
 
 USER REQUEST:
 ${userPrompt}`;
 }
 
+function getRoutingDefaults(stations = []) {
+    const validStations = stations.filter((station) => station?.id);
+    const distributionStations = validStations.filter((station) => station.type === 'distribution');
+    const nonDistributionStations = validStations.filter((station) => station.type !== 'distribution');
+    const defaultOrigin = distributionStations[0]?.id || validStations[0]?.id || '';
+    const defaultDestination = nonDistributionStations.find((station) => station.id !== defaultOrigin)?.id
+        || validStations.find((station) => station.id !== defaultOrigin)?.id
+        || defaultOrigin;
+
+    return {
+        defaultOrigin,
+        defaultDestination,
+        distributionStations,
+        nonDistributionStations,
+    };
+}
+
 function buildFallbackDispatchPlan(prompt, stations) {
     const normalizedPrompt = String(prompt || '').trim();
     const lowerPrompt = normalizedPrompt.toLowerCase();
-    const destinations = stations.filter((station) => station.type !== 'distribution').map((station) => station.id);
-    const destination = destinations.find((stationId) => lowerPrompt.includes(stationId.toLowerCase())) || 'Chisasibi';
+    const {
+        defaultOrigin,
+        defaultDestination,
+        distributionStations,
+        nonDistributionStations,
+    } = getRoutingDefaults(stations);
+    const origin = distributionStations.find((station) => lowerPrompt.includes(station.id.toLowerCase()))?.id || defaultOrigin;
+    const destinations = nonDistributionStations.map((station) => station.id);
+    const destination = destinations.find((stationId) => lowerPrompt.includes(stationId.toLowerCase())) || defaultDestination;
     const priority = /(emergency|stat|immediately|critical)/i.test(normalizedPrompt)
         ? 'Emergency'
         : /(urgent|tonight|asap|priority)/i.test(normalizedPrompt)
@@ -767,10 +800,10 @@ function buildFallbackDispatchPlan(prompt, stations) {
     return {
         payload,
         weight_kg: weightKg,
-        origin: 'Chibougamau Hub',
+        origin,
         destination,
         priority,
-        route: ['Chibougamau Hub', destination],
+        route: [origin, destination].filter(Boolean),
         estimated_legs: 1,
         estimated_time_minutes: priority === 'Emergency' ? 70 : 95,
         reasoning: 'Gemini structured output was unavailable, so the backend generated a fallback manifest from the request text.',
@@ -826,6 +859,7 @@ ${prompt}`;
 function buildFallbackSupplyRequestPreview({
     prompt,
     clinicName,
+    defaultOrigin,
     defaultDestination,
 }) {
     const normalizedPrompt = String(prompt || '').trim();
@@ -846,7 +880,7 @@ function buildFallbackSupplyRequestPreview({
         payload: payload.charAt(0).toUpperCase() + payload.slice(1),
         priority,
         destination: defaultDestination,
-        origin: 'Chibougamau Hub',
+        origin: defaultOrigin,
         clinicNotes: normalizedPrompt,
         summary: `${clinicName} submitted a ${priority.toLowerCase()} request that should be reviewed by dispatch before launch approval.`,
         model: 'fallback-clinic-intake',
@@ -858,12 +892,13 @@ function normalizeSupplyRequestPreview(result, {
     requestedBy,
     requestedByEmail,
     clinicName,
+    defaultOrigin,
     defaultDestination,
 }) {
     return {
         payload: String(result?.payload || 'Medical supplies requiring dispatcher review').trim(),
         priority: ['Routine', 'Urgent', 'Emergency'].includes(result?.priority) ? result.priority : 'Routine',
-        origin: String(result?.origin || 'Chibougamau Hub').trim() || 'Chibougamau Hub',
+        origin: String(result?.origin || defaultOrigin).trim() || defaultOrigin,
         destination: String(result?.destination || defaultDestination).trim() || defaultDestination,
         clinicNotes: String(result?.clinicNotes || '').trim(),
         geminiSummary: String(result?.summary || '').trim(),
@@ -896,6 +931,7 @@ function findDemoRoutePair(stations = [], lines = [], weatherByStation = {}) {
     const destinations = stations.filter((station) => station.type === 'pick_up');
     const candidateOrigins = origins.length > 0 ? origins : stations;
     const candidateDestinations = destinations.length > 0 ? destinations : stations;
+    const routeWeatherIndex = Object.keys(weatherByStation || {}).length > 0 ? weatherByStation : {};
 
     let bestPair = null;
 
@@ -908,27 +944,38 @@ function findDemoRoutePair(stations = [], lines = [], weatherByStation = {}) {
                 destination: destination.id,
                 lines,
                 stationsById,
-                weatherByStation,
+                weatherByStation: routeWeatherIndex,
                 mode: 'automatic',
             });
 
-            if (bestRoute.length < 3) return;
+            const graphBestRoute = bestRoute.length > 0
+                ? bestRoute
+                : findBestRoute({
+                    origin: origin.id,
+                    destination: destination.id,
+                    lines,
+                    stationsById,
+                    weatherByStation: {},
+                    mode: 'automatic',
+                });
+
+            if (graphBestRoute.length < 3) return;
 
             let alternateRoute = [];
-            buildAvoidCombinations(bestRoute).forEach((avoidStations) => {
+            buildAvoidCombinations(graphBestRoute).forEach((avoidStations) => {
                 const candidateRoute = findBestRoute({
                     origin: origin.id,
                     destination: destination.id,
                     lines,
                     stationsById,
-                    weatherByStation,
+                    weatherByStation: {},
                     avoidStations,
                     mode: 'automatic',
                 });
 
                 if (
-                    candidateRoute.length > bestRoute.length
-                    && JSON.stringify(candidateRoute) !== JSON.stringify(bestRoute)
+                    candidateRoute.length > graphBestRoute.length
+                    && JSON.stringify(candidateRoute) !== JSON.stringify(graphBestRoute)
                     && candidateRoute[0] === origin.id
                     && candidateRoute[candidateRoute.length - 1] === destination.id
                     && (alternateRoute.length === 0 || candidateRoute.length > alternateRoute.length)
@@ -939,12 +986,12 @@ function findDemoRoutePair(stations = [], lines = [], weatherByStation = {}) {
 
             if (!alternateRoute.length) return;
 
-            const score = alternateRoute.length - bestRoute.length;
+            const score = alternateRoute.length - graphBestRoute.length;
             if (!bestPair || score > bestPair.score) {
                 bestPair = {
                     origin: origin.id,
                     destination: destination.id,
-                    bestRoute,
+                    bestRoute: graphBestRoute,
                     alternateRoute,
                     score,
                 };
@@ -1539,8 +1586,9 @@ app.post('/api/deliveries/request/preview', async (req, res) => {
         const requestedBy = String(req.body?.requestedBy || req.body?.clinic || 'Clinic operator').trim();
         const requestedByEmail = String(req.body?.requestedByEmail || '').trim();
         const clinicName = String(req.body?.clinic || 'Clinic').trim();
-        const defaultDestination = String(req.body?.destination || 'Chisasibi').trim();
         const { stations, lines, drones, weather, weatherByStation } = await getRoutingContext();
+        const routingDefaults = getRoutingDefaults(stations);
+        const defaultDestination = String(req.body?.destination || routingDefaults.defaultDestination).trim() || routingDefaults.defaultDestination;
 
         let interpreted;
         try {
@@ -1568,6 +1616,7 @@ app.post('/api/deliveries/request/preview', async (req, res) => {
             interpreted = buildFallbackSupplyRequestPreview({
                 prompt,
                 clinicName,
+                defaultOrigin: routingDefaults.defaultOrigin,
                 defaultDestination,
             });
         }
@@ -1577,6 +1626,7 @@ app.post('/api/deliveries/request/preview', async (req, res) => {
             requestedBy,
             requestedByEmail,
             clinicName,
+            defaultOrigin: routingDefaults.defaultOrigin,
             defaultDestination,
         });
         const validStationIds = new Set(stations.map((station) => station.id));
@@ -1584,7 +1634,7 @@ app.post('/api/deliveries/request/preview', async (req, res) => {
             normalizedPreview.destination = defaultDestination;
         }
         if (!validStationIds.has(normalizedPreview.origin)) {
-            normalizedPreview.origin = 'Chibougamau Hub';
+            normalizedPreview.origin = routingDefaults.defaultOrigin;
         }
 
         const planned = planDeliveryOperation({
@@ -1617,8 +1667,9 @@ app.post('/api/deliveries/request', async (req, res) => {
         const requestedBy = String(req.body?.requestedBy || req.body?.clinic || 'Clinic operator').trim();
         const requestedByEmail = String(req.body?.requestedByEmail || '').trim();
         const clinicName = String(req.body?.clinic || 'Clinic').trim();
-        const defaultDestination = String(req.body?.destination || 'Chisasibi').trim();
         const { stations, lines, drones, weatherByStation } = await getRoutingContext();
+        const routingDefaults = getRoutingDefaults(stations);
+        const defaultDestination = String(req.body?.destination || routingDefaults.defaultDestination).trim() || routingDefaults.defaultDestination;
 
         const validStationIds = new Set(stations.map((station) => station.id));
         const normalizedRequest = normalizeSupplyRequestPreview({
@@ -1629,6 +1680,7 @@ app.post('/api/deliveries/request', async (req, res) => {
             requestedBy,
             requestedByEmail,
             clinicName,
+            defaultOrigin: routingDefaults.defaultOrigin,
             defaultDestination,
         });
 
@@ -1639,7 +1691,7 @@ app.post('/api/deliveries/request', async (req, res) => {
             normalizedRequest.destination = defaultDestination;
         }
         if (!validStationIds.has(normalizedRequest.origin)) {
-            normalizedRequest.origin = 'Chibougamau Hub';
+            normalizedRequest.origin = routingDefaults.defaultOrigin;
         }
 
         const planned = planDeliveryOperation({

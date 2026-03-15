@@ -556,8 +556,24 @@ export function planDeliveryOperation({
         weatherByStation,
         mode: 'automatic',
     });
-    const bestAvailablePath = generatedPrimaryPath.length > 0 ? generatedPrimaryPath : requestedPath;
-    const primaryPath = requestedPath.length > 0 ? requestedPath : generatedPrimaryPath;
+    const graphPrimaryPath = findBestRoute({
+        origin: missionStart,
+        destination,
+        lines,
+        stationsById,
+        weatherByStation: {},
+        mode: 'automatic',
+    });
+    const bestAvailablePath = generatedPrimaryPath.length > 0
+        ? generatedPrimaryPath
+        : graphPrimaryPath.length > 0
+            ? graphPrimaryPath
+            : requestedPath;
+    const primaryPath = requestedPath.length > 0
+        ? requestedPath
+        : generatedPrimaryPath.length > 0
+            ? generatedPrimaryPath
+            : graphPrimaryPath;
     const primaryFullRoute = existingPrefix.length > 0
         ? [...existingPrefix, ...primaryPath.slice(1)]
         : primaryPath;
