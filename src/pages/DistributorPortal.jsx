@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 
 const ACTIVE_STATUSES = ['PENDING_DISPATCH', 'READY_TO_LAUNCH', 'IN_TRANSIT', 'HANDOFF', 'WEATHER_HOLD', 'REROUTED'];
+const SOLANA_MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 
 function statusBadge(status) {
     return {
@@ -95,6 +96,22 @@ function formatSolanaSignature(signature) {
     if (!signature) return 'Pending';
     if (signature.length <= 18) return signature;
     return `${signature.slice(0, 8)}...${signature.slice(-8)}`;
+}
+
+function truncateMiddle(value, start = 10, end = 8) {
+    if (!value) return '-';
+    if (value.length <= start + end + 3) return value;
+    return `${value.slice(0, start)}...${value.slice(-end)}`;
+}
+
+function truncateText(value, maxLength = 56) {
+    if (!value) return '-';
+    if (value.length <= maxLength) return value;
+    return `${value.slice(0, Math.max(maxLength - 3, 1))}...`;
+}
+
+function formatLedgerRoute(delivery) {
+    return [delivery.origin, delivery.destination].filter(Boolean).join(' -> ') || '-';
 }
 
 function getPreferredStationId(stations = [], selectors = []) {
@@ -207,6 +224,8 @@ export default function DistributorPortal() {
     const completedDeliveries = deliveries.filter((delivery) => delivery.status === 'DELIVERED').sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt));
     const history = [...deliveries].sort((a, b) => toTimestamp(b.createdAt) - toTimestamp(a.createdAt));
     const selectedDrone = drones.find((drone) => drone.id === selectedDroneId) || null;
+    const ledgerProgram = completedDeliveries[0]?.solanaProgram || SOLANA_MEMO_PROGRAM;
+    const onChainCompletedDeliveries = completedDeliveries.filter((delivery) => delivery.solanaOnChain);
     const sortedStations = [...stations].sort((left, right) => left.id.localeCompare(right.id));
     const distributionStations = sortedStations.filter((station) => station.type === 'distribution');
     const originStations = sortedStations;
@@ -549,43 +568,83 @@ export default function DistributorPortal() {
     if (hash === '#ledger') {
         return (
             <div>
-                <div className="page-header"><h1>Custody Ledger</h1><p>Delivered manifests with Solana-style custody attestations, memo payloads, and explorer traces for each handoff record.</p></div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16, marginBottom: 16 }}>
-                    <div className="stat-card"><div className="stat-label">ATTESTED DELIVERIES</div><div className="stat-value">{completedDeliveries.length}</div><div className="stat-sub stat-sub-muted">Each manifest gets a transaction signature.</div></div>
-                    <div className="stat-card"><div className="stat-label">SOLANA NETWORK</div><div className="stat-value">{completedDeliveries[0]?.solanaNetwork || 'devnet'}</div><div className="stat-sub stat-sub-muted">Fast settlement and public verification.</div></div>
-                    <div className="stat-card"><div className="stat-label">PROGRAM</div><div className="stat-value" style={{ fontSize: 22 }}>{completedDeliveries[0]?.solanaProgram || 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'}</div><div className="stat-sub stat-sub-muted">Memo + PDA attestations keep custody records tamper-evident.</div></div>
+                <div className="page-header"><h1>Custody Ledger</h1><p>Delivered manifests with compact Solana-format custody attestations, memo program references, and live devnet explorer traces once confirmation lands.</p></div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 16 }}>
+                    <div className="stat-card"><div className="stat-label">ATTESTED DELIVERIES</div><div className="stat-value">{completedDeliveries.length}</div><div className="stat-sub stat-sub-muted">Each manifest gets a Solana-format custody record.</div></div>
+                    <div className="stat-card"><div className="stat-label">SOLANA NETWORK</div><div className="stat-value">{completedDeliveries[0]?.solanaNetwork || 'devnet'}</div><div className="stat-sub stat-sub-muted">{onChainCompletedDeliveries.length > 0 ? `${onChainCompletedDeliveries.length} live devnet attestations confirmed.` : 'New deliveries publish to devnet automatically.'}</div></div>
+                    <div className="stat-card">
+                        <div className="stat-label">PROGRAM</div>
+                        <div className="stat-value" style={{ fontSize: 22, lineHeight: 1.1 }}>Memo Program</div>
+                        <div
+                            className="stat-sub stat-sub-muted"
+                            title={ledgerProgram}
+                            style={{
+                                fontFamily: 'var(--mono)',
+                                fontSize: 11,
+                                overflowWrap: 'anywhere',
+                                lineHeight: 1.4,
+                            }}
+                        >
+                            {truncateMiddle(ledgerProgram, 14, 12)}
+                        </div>
+                        <div className="stat-sub stat-sub-muted">Memo + PDA attestations keep custody records tamper-evident.</div>
+                    </div>
                 </div>
                 <div className="card" style={{ marginBottom: 16, padding: 18 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 8 }}>Why Solana helps</div>
                     <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-                        Each completed mission is written as a memo-backed custody event with a transaction signature, slot, and derived PDA reference. That gives dispatch a fast, independently verifiable audit trail for who approved the shipment, which route was flown, and what payload reached the clinic without waiting on a private back-office reconciliation job.
+                        Each completed mission is recorded in a Solana-compatible custody format with a real devnet transaction signature, slot, and derived PDA reference. That gives dispatch a public audit trail for who moved the shipment and exactly which manifest reached the clinic.
                     </div>
                 </div>
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                    <table className="data-table">
-                        <thead><tr><th>Delivered</th><th>ID</th><th>Payload</th><th>Program</th><th>Slot</th><th>Transaction</th></tr></thead>
+                <div className="card" style={{ padding: 0, overflowX: 'auto', overflowY: 'hidden' }}>
+                    <table className="data-table" style={{ tableLayout: 'fixed', minWidth: 980 }}>
+                        <thead><tr><th style={{ width: 150 }}>Delivered</th><th style={{ width: 100 }}>ID</th><th>Payload</th><th style={{ width: 170 }}>Program</th><th style={{ width: 120 }}>Slot</th><th style={{ width: 220 }}>Attestation</th></tr></thead>
                         <tbody>
                             {completedDeliveries.map((delivery) => (
                                 <tr key={delivery.id}>
                                     <td className="mono muted">{formatDateTime(delivery.createdAt)}</td>
                                     <td className="mono bold">{delivery.id}</td>
-                                    <td>
-                                        <div className="bold">{delivery.payload}</div>
-                                        <div className="muted" style={{ fontSize: 12 }}>{delivery.origin} to {delivery.destination}</div>
-                                        {delivery.solanaMemo && <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{delivery.solanaMemo}</div>}
+                                    <td title={`${delivery.payload || ''}\n${formatLedgerRoute(delivery)}`}>
+                                        <div className="bold" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{truncateText(delivery.payload, 42)}</div>
+                                        <div className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatLedgerRoute(delivery)}</div>
                                     </td>
-                                    <td className="muted">{delivery.solanaProgram || 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'}</td>
+                                    <td
+                                        className="muted mono"
+                                        title={delivery.solanaProgram || SOLANA_MEMO_PROGRAM}
+                                        style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                    >
+                                        {truncateMiddle(delivery.solanaProgram || SOLANA_MEMO_PROGRAM)}
+                                    </td>
                                     <td className="mono muted">{delivery.solanaSlot || '-'}</td>
                                     <td>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                            <span className="tx-pill"><LinkIcon size={11} /> {formatSolanaSignature(delivery.solanaTx)}<span className="tx-verified"><Lock size={10} /> Verified</span></span>
-                                            {delivery.solanaExplorerUrl && (
+                                            <span className="tx-pill" title={delivery.solanaTx || 'Pending attestation'}>
+                                                <LinkIcon size={11} /> {formatSolanaSignature(delivery.solanaTx)}
+                                                <span className="tx-verified"><Lock size={10} /> {delivery.solanaOnChain ? 'Confirmed' : 'Pending'}</span>
+                                            </span>
+                                            {delivery.solanaOnChain && delivery.solanaExplorerUrl && (
                                                 <a href={delivery.solanaExplorerUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--accent)' }}>
                                                     Explorer <ExternalLink size={12} />
                                                 </a>
                                             )}
                                         </div>
-                                        {delivery.solanaAccountPda && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>PDA {formatSolanaSignature(delivery.solanaAccountPda)}</div>}
+                                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+                                            {delivery.solanaOnChain
+                                                ? 'Confirmed on Solana devnet'
+                                                : delivery.solanaAttestationError
+                                                    ? delivery.solanaAttestationError.includes('429')
+                                                        ? 'Devnet faucet unavailable for fee funding'
+                                                        : 'Retrying devnet publication'
+                                                    : 'Waiting for devnet confirmation'}
+                                        </div>
+                                        {delivery.solanaAccountPda && (
+                                            <div
+                                                style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                                title={delivery.solanaAccountPda}
+                                            >
+                                                PDA {truncateMiddle(delivery.solanaAccountPda)}
+                                            </div>
+                                        )}
                                     </td>
                                 </tr>
                             ))}

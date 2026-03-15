@@ -22,6 +22,7 @@ import {
     planDroneRelocation,
     planDeliveryOperation,
 } from './services/operations.js';
+import { createSolanaAttestation, deriveDeliveryPda } from './services/solana.js';
 import { buildWeatherIndex, getWeatherSnapshots } from './services/weather.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -70,6 +71,9 @@ const DELIVERY_SYNC_FIELDS = [
     'solanaMemo',
     'solanaAccountPda',
     'solanaExplorerUrl',
+    'solanaOnChain',
+    'solanaAttestedAt',
+    'solanaAttestationError',
     'route',
     'reasoning',
     'estimatedTime',
@@ -538,19 +542,20 @@ function buildSolanaLedgerMetadata(payload = {}) {
         payload.requestedByEmail || payload.requestedBy || payload.clinic,
     ].filter(Boolean).join(':');
     const network = payload.solanaNetwork || 'devnet';
-    const tx = isValidBase58Token(String(payload.solanaTx || '').trim(), 64)
-        ? String(payload.solanaTx || '').trim()
-        : buildBase58Token(`${seed}:tx`, 64);
     const memo = payload.solanaMemo || `Aeroed custody ${payload.id || 'pending'} ${payload.origin || 'hub'}>${payload.destination || 'clinic'}`;
-    const slot = Number.isFinite(Number(payload.solanaSlot))
+    const onChain = Boolean(payload.solanaOnChain);
+    const tx = onChain && isValidBase58Token(String(payload.solanaTx || '').trim(), 64)
+        ? String(payload.solanaTx || '').trim()
+        : '';
+    const slot = onChain && Number.isFinite(Number(payload.solanaSlot))
         ? Number(payload.solanaSlot)
-        : 280000000 + (hashString(`${seed}:slot`) % 9500000);
+        : null;
     const program = isValidBase58Token(String(payload.solanaProgram || '').trim(), 32)
         ? String(payload.solanaProgram || '').trim()
         : 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
     const accountPda = isValidBase58Token(String(payload.solanaAccountPda || '').trim(), 32)
         ? String(payload.solanaAccountPda || '').trim()
-        : buildBase58Token(`${seed}:pda`, 32);
+        : deriveDeliveryPda(payload);
 
     return {
         solanaTx: tx,
@@ -559,7 +564,10 @@ function buildSolanaLedgerMetadata(payload = {}) {
         solanaProgram: program,
         solanaMemo: memo,
         solanaAccountPda: accountPda,
-        solanaExplorerUrl: `https://explorer.solana.com/tx/${tx}?cluster=${network}`,
+        solanaExplorerUrl: onChain && tx ? `https://explorer.solana.com/tx/${tx}?cluster=${network}` : '',
+        solanaOnChain: onChain,
+        solanaAttestedAt: payload.solanaAttestedAt ? new Date(payload.solanaAttestedAt) : null,
+        solanaAttestationError: payload.solanaAttestationError || '',
     };
 }
 
@@ -654,17 +662,17 @@ function buildDeliveryUpdate(current, planned) {
     const merged = {
         ...current,
         ...planned,
-        status: current.status === 'DELIVERED' ? 'DELIVERED' : planned.status,
-        currentLeg: current.status === 'DELIVERED'
+        status: ['ARRIVED', 'DELIVERED'].includes(current.status) ? current.status : planned.status,
+        currentLeg: ['ARRIVED', 'DELIVERED'].includes(current.status)
             ? Math.max(current.totalLegs || 0, planned.totalLegs || 0)
             : Number(current.currentLeg || planned.currentLeg || 0),
         totalLegs: planned.totalLegs || current.totalLegs,
-        lastStation: current.status === 'DELIVERED'
+        lastStation: ['ARRIVED', 'DELIVERED'].includes(current.status)
             ? current.destination
             : current.currentLeg > 0
                 ? current.lastStation || current.origin
                 : current.origin || planned.origin,
-        eta: current.status === 'DELIVERED'
+        eta: ['ARRIVED', 'DELIVERED'].includes(current.status)
             ? current.eta
             : generateETA(planned.estimatedMinutes || current.estimatedMinutes || 120),
         solanaTx: current.solanaTx,
@@ -672,6 +680,46 @@ function buildDeliveryUpdate(current, planned) {
     };
 
     return buildDeliveryPayload(merged);
+}
+
+const solanaAttestationJobs = new Map();
+
+function shouldAttestOnChain(delivery = {}) {
+    return delivery.status === 'DELIVERED' && !delivery.solanaOnChain;
+}
+
+async function queueDeliveryAttestation(deliveryDoc) {
+    if (!deliveryDoc || !shouldAttestOnChain(serializeDoc(deliveryDoc))) {
+        return null;
+    }
+
+    if (solanaAttestationJobs.has(deliveryDoc.id)) {
+        return solanaAttestationJobs.get(deliveryDoc.id);
+    }
+
+    const job = (async () => {
+        try {
+            const current = serializeDoc(deliveryDoc);
+            const attestation = await createSolanaAttestation(current);
+            const next = buildDeliveryPayload({
+                ...current,
+                ...attestation,
+            });
+            applyDeliverySnapshot(deliveryDoc, next);
+            await deliveryDoc.save();
+            return attestation;
+        } catch (err) {
+            deliveryDoc.solanaOnChain = false;
+            deliveryDoc.solanaAttestationError = err.message;
+            await deliveryDoc.save();
+            return null;
+        } finally {
+            solanaAttestationJobs.delete(deliveryDoc.id);
+        }
+    })();
+
+    solanaAttestationJobs.set(deliveryDoc.id, job);
+    return job;
 }
 
 async function syncOperationalDeliveries(deliveryDocs, stations, lines, weatherByStation, drones = []) {
@@ -798,7 +846,6 @@ async function buildOperationalOverview() {
             updatedAt: weather.updatedAt,
             source: weather.source,
             stations: weatherStations,
-            probes: weather.probes || [],
         },
         metrics,
         notifications,
@@ -1522,16 +1569,16 @@ async function advanceMissionProgress(delivery, drone) {
         const nextLeg = Number(delivery.currentLeg || 0) + 1;
 
         if (nextLeg >= totalLegs) {
-            delivery.status = 'DELIVERED';
+            delivery.status = 'ARRIVED';
             delivery.currentLeg = totalLegs;
             delivery.lastStation = delivery.destination || route[route.length - 1] || delivery.lastStation;
             delivery.assignedDrone = null;
             delivery.manualAttentionRequired = false;
             delivery.events = mergeDeliveryEvents(delivery.events, [
                 makeDeliveryEvent(
-                    'DELIVERED',
-                    'Payload received',
-                    `Delivery confirmed at ${delivery.destination}.`,
+                    'ARRIVED',
+                    'Payload arrived at destination',
+                    `Delivery arrived at ${delivery.destination}. Awaiting clinic confirmation.`,
                     delivery.destination || null
                 ),
             ]);
@@ -1567,6 +1614,9 @@ async function advanceMissionProgress(delivery, drone) {
     if (!changed) return false;
 
     await Promise.all([delivery.save(), drone.save()]);
+    if (delivery.status === 'DELIVERED') {
+        void queueDeliveryAttestation(delivery);
+    }
     return true;
 }
 
@@ -1590,7 +1640,7 @@ async function reconcileOperationalState() {
 
         for (const drone of droneDocs) {
             const assignedDelivery = drone.assignment ? deliveryById.get(drone.assignment) : null;
-            if (!assignedDelivery || ['DELIVERED', 'REJECTED', 'CANCELLED'].includes(assignedDelivery.status)) {
+            if (!assignedDelivery || ['ARRIVED', 'DELIVERED', 'REJECTED', 'CANCELLED'].includes(assignedDelivery.status)) {
                 if (drone.assignment || (drone.status === 'on_route' && !assignedDelivery)) {
                     clearDroneMissionState(drone, assignedDelivery?.destination || drone.location);
                     await drone.save();
@@ -1602,7 +1652,7 @@ async function reconcileOperationalState() {
         const serializedDrones = refreshedDrones.map((drone) => buildDronePayload(serializeDoc(drone)));
 
         for (const delivery of deliveryDocs) {
-            if (['DELIVERED', 'REJECTED', 'CANCELLED'].includes(delivery.status)) {
+            if (['ARRIVED', 'DELIVERED', 'REJECTED', 'CANCELLED'].includes(delivery.status)) {
                 continue;
             }
             await repairQueuedDelivery(delivery, {
@@ -1667,6 +1717,12 @@ async function reconcileOperationalState() {
                 await delivery.save();
             }
             await advanceMissionProgress(delivery, activeDrone);
+        }
+
+        for (const delivery of deliveryDocs) {
+            if (shouldAttestOnChain(serializeDoc(delivery))) {
+                void queueDeliveryAttestation(delivery);
+            }
         }
     })()
         .finally(() => {
@@ -2491,6 +2547,9 @@ app.patch('/api/deliveries/:id/status', async (req, res) => {
         }
 
         await delivery.save();
+        if (status === 'DELIVERED') {
+            await queueDeliveryAttestation(delivery);
+        }
         res.json(serializeDoc(delivery));
     } catch (err) {
         sendApiError(res, err);
@@ -2503,7 +2562,7 @@ app.patch('/api/deliveries/:id/cancel', async (req, res) => {
         if (!delivery) {
             return res.status(404).json({ error: 'Delivery not found.' });
         }
-        if (['DELIVERED', 'REJECTED', 'CANCELLED'].includes(delivery.status)) {
+        if (['ARRIVED', 'DELIVERED', 'REJECTED', 'CANCELLED'].includes(delivery.status)) {
             return res.status(400).json({ error: `Cannot cancel delivery with status ${delivery.status}.` });
         }
 

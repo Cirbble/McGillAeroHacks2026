@@ -9,6 +9,7 @@ export const DELIVERY_STATUSES = [
     'WEATHER_HOLD',
     'REROUTED',
     'REJECTED',
+    'ARRIVED',
     'DELIVERED',
 ];
 
@@ -20,6 +21,7 @@ export const ACTIVE_DELIVERY_STATUSES = new Set([
     'HANDOFF',
     'WEATHER_HOLD',
     'REROUTED',
+    'ARRIVED',
 ]);
 
 const HIGH_PRIORITY = new Set(['Urgent', 'Emergency']);
@@ -209,10 +211,10 @@ function buildDeliveryEtaProfile({
     const estimatedMinutes = Math.max(
         22,
         baseFlightMinutes
-            + handoffDelayMinutes
-            + weatherDelayMinutes
-            + rerouteCoordinationMinutes
-            + priorityAdjustmentMinutes
+        + handoffDelayMinutes
+        + weatherDelayMinutes
+        + rerouteCoordinationMinutes
+        + priorityAdjustmentMinutes
     );
 
     return {
@@ -703,21 +705,21 @@ export function planDeliveryOperation({
         ? 'Remove this request from the dispatch queue and notify the sender of the policy rejection.'
         : status === 'CANCELLED'
             ? 'This mission was cancelled and should remain archived for audit only.'
-        : status === 'REQUESTED'
-            ? 'Keep this request in the intake queue until a dispatcher approves the manifest for launch planning.'
-        : status === 'AWAITING_REVIEW'
-            ? 'Keep the mission in review until pharmacy details and compliance checks are complete.'
-        : status === 'WEATHER_HOLD'
-                ? hasAlternateRoute
-                    ? 'Pause launch on the current path and manually approve the suggested alternate corridor if the mission must continue.'
-                    : 'Pause launch and wait for safer weather before continuing on the planned corridor.'
-                : shouldUseReroute
-                    ? 'Manual reroute approved. Notify downstream stations of the updated handoff chain.'
-                    : hasAlternateRoute && primaryAssessment.routeState !== 'CLEAR'
-                        ? 'The current path is weather-affected. Review the suggested alternate corridor and trigger a manual reroute if you want to switch.'
-                    : routeAssessment.routeState === 'WATCH'
-                        ? 'Launch is allowed, but keep the highlighted nodes under operator watch.'
-                        : 'Maintain the planned corridor and monitor normally.';
+            : status === 'REQUESTED'
+                ? 'Keep this request in the intake queue until a dispatcher approves the manifest for launch planning.'
+                : status === 'AWAITING_REVIEW'
+                    ? 'Keep the mission in review until pharmacy details and compliance checks are complete.'
+                    : status === 'WEATHER_HOLD'
+                        ? hasAlternateRoute
+                            ? 'Pause launch on the current path and manually approve the suggested alternate corridor if the mission must continue.'
+                            : 'Pause launch and wait for safer weather before continuing on the planned corridor.'
+                        : shouldUseReroute
+                            ? 'Manual reroute approved. Notify downstream stations of the updated handoff chain.'
+                            : hasAlternateRoute && primaryAssessment.routeState !== 'CLEAR'
+                                ? 'The current path is weather-affected. Review the suggested alternate corridor and trigger a manual reroute if you want to switch.'
+                                : routeAssessment.routeState === 'WATCH'
+                                    ? 'Launch is allowed, but keep the highlighted nodes under operator watch.'
+                                    : 'Maintain the planned corridor and monitor normally.';
 
     const detailReasoning = [
         sanitized.reasoning,
@@ -958,25 +960,25 @@ export function buildPathWeatherReport(delivery = null, weatherByStation = {}) {
         ? `Manual reroute active around ${topWarning?.stationId || 'weather risk'}`
         : manualRerouteSuggested
             ? `Manual reroute available around ${topWarning?.stationId || 'current weather risk'}`
-        : delivery.status === 'WEATHER_HOLD'
-            ? alternateSuggested
-                ? `Manual reroute recommended around ${topWarning?.stationId || 'severe weather'}`
-                : `Route held by ${topWarning?.stationId || 'severe weather'}`
-            : warnings.length > 0
-                ? `Weather is active along the ${delivery.id} path`
-                : `Route is clear for ${delivery.id}`;
+            : delivery.status === 'WEATHER_HOLD'
+                ? alternateSuggested
+                    ? `Manual reroute recommended around ${topWarning?.stationId || 'severe weather'}`
+                    : `Route held by ${topWarning?.stationId || 'severe weather'}`
+                : warnings.length > 0
+                    ? `Weather is active along the ${delivery.id} path`
+                    : `Route is clear for ${delivery.id}`;
 
     const operationalEffect = rerouteActive
         ? `The operator moved this mission onto a ${route.length}-stop alternate corridor.`
         : manualRerouteSuggested
             ? `A safer ${delivery.recommendedRoute.length}-stop corridor is available if you approve a manual reroute.`
-        : delivery.status === 'WEATHER_HOLD'
-            ? alternateSuggested
-                ? 'The planned route is paused until an operator approves the suggested alternate corridor.'
-                : 'Launch or onward handoff should pause until a safer corridor is available.'
-            : warnings.length > 0
-                ? `${warnings.length} route segment${warnings.length === 1 ? '' : 's'} need extra operator attention.`
-                : 'No weather-driven path changes are currently required.';
+            : delivery.status === 'WEATHER_HOLD'
+                ? alternateSuggested
+                    ? 'The planned route is paused until an operator approves the suggested alternate corridor.'
+                    : 'Launch or onward handoff should pause until a safer corridor is available.'
+                : warnings.length > 0
+                    ? `${warnings.length} route segment${warnings.length === 1 ? '' : 's'} need extra operator attention.`
+                    : 'No weather-driven path changes are currently required.';
 
     return {
         deliveryId: delivery.id,
@@ -1117,8 +1119,8 @@ export function planDroneRelocation({
         && requestedRoute[0] === origin
         && requestedRoute[requestedRoute.length - 1] === destination
         && isRouteSegmentValid(requestedRoute, lines)
-            ? requestedRoute
-            : [];
+        ? requestedRoute
+        : [];
 
     const generatedPrimaryPath = findBestRoute({
         origin,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useStore } from '../store';
-import { speakText, generateArrivalAlert } from '../services/elevenlabs';
+import { speakText, stopSpeaking, generateArrivalAlert } from '../services/elevenlabs';
 import CorridorMapShared from '../components/CorridorMap';
 import {
     AlertTriangle,
@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 
 const FINAL_STATUSES = ['DELIVERED', 'REJECTED', 'CANCELLED'];
-const ACTIVE_TRANSIT_STATUSES = ['IN_TRANSIT', 'HANDOFF', 'REROUTED', 'WEATHER_HOLD'];
+const ACTIVE_TRANSIT_STATUSES = ['IN_TRANSIT', 'HANDOFF', 'REROUTED', 'WEATHER_HOLD', 'ARRIVED'];
 
 function statusBadge(status) {
     return {
@@ -30,6 +30,7 @@ function statusBadge(status) {
         HANDOFF: 'badge-blue',
         WEATHER_HOLD: 'badge-red',
         REROUTED: 'badge-blue',
+        ARRIVED: 'badge-green',
         DELIVERED: 'badge-green',
         REJECTED: 'badge-red',
         CANCELLED: 'badge-neutral',
@@ -46,6 +47,7 @@ function statusLabel(status) {
         HANDOFF: 'Relay Handoff',
         WEATHER_HOLD: 'Weather Hold',
         REROUTED: 'Rerouted',
+        ARRIVED: 'Arrived — Confirm Receipt',
         DELIVERED: 'Delivered',
         REJECTED: 'Rejected',
         CANCELLED: 'Cancelled',
@@ -117,11 +119,11 @@ function buildPreviewNarration(preview, lang = 'en') {
     }
     if (lang === 'iu') {
         return [
-            `${preview.destination} request preview.`,
-            `Payload: ${preview.payload}.`,
-            `Priority: ${preview.priority}.`,
+            `${preview.destination} tukisinnaujuq takunnaqtaugiaqtuq.`,
+            `Uumajuq: ${preview.payload}.`,
+            `Piujuqtut: ${preview.priority}.`,
             preview.geminiSummary || preview.reasoning || '',
-            preview.clinicNotes ? `Notes: ${preview.clinicNotes}.` : '',
+            preview.clinicNotes ? `Titiraqsimajut: ${preview.clinicNotes}.` : '',
         ].filter(Boolean).join(' ');
     }
     return [
@@ -134,7 +136,8 @@ function buildPreviewNarration(preview, lang = 'en') {
 }
 
 function getCurrentStep(status) {
-    if (status === 'DELIVERED') return 4;
+    if (status === 'DELIVERED') return 5;
+    if (status === 'ARRIVED') return 4;
     if (status === 'CANCELLED' || status === 'REJECTED') return -1;
     if (['REQUESTED', 'AWAITING_REVIEW'].includes(status)) return 1;
     if (['PENDING_DISPATCH', 'READY_TO_LAUNCH'].includes(status)) return 2;
@@ -152,7 +155,7 @@ function getSpeechRecognitionLocale(lang) {
 function RequestTimeline({ status }) {
     if (status === 'REJECTED' || status === 'CANCELLED') return null;
     const currentStep = getCurrentStep(status);
-    const labels = ['Drafted', 'Reviewed', 'Queued', 'Transit', 'Delivered'];
+    const labels = ['Drafted', 'Reviewed', 'Queued', 'Transit', 'Arrived', 'Confirmed'];
 
     return (
         <>
@@ -236,11 +239,12 @@ export default function ReceiverPortal({ user }) {
     useEffect(() => {
         if (!nextDelivery || minutesToArrival > 15 || announcedDeliveryRef.current === nextDelivery.id) return;
         announcedDeliveryRef.current = nextDelivery.id;
-        speakText(generateArrivalAlert(nextDelivery, lang), lang).catch(() => {});
+        speakText(generateArrivalAlert(nextDelivery, lang), lang).catch(() => { });
     }, [nextDelivery, minutesToArrival, lang]);
 
     const handleVoiceAlert = async () => {
         if (!nextDelivery) return;
+        if (isSpeaking) { stopSpeaking(); setIsSpeaking(false); return; }
         setIsSpeaking(true);
         try {
             await speakText(generateArrivalAlert(nextDelivery, lang), lang);
@@ -287,13 +291,12 @@ export default function ReceiverPortal({ user }) {
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = getSpeechRecognitionLocale(lang);
-        let finalTranscript = '';
-
         recognition.onresult = (event) => {
+            let newFinal = '';
             let interimTranscript = '';
             for (let index = event.resultIndex; index < event.results.length; index += 1) {
                 if (event.results[index].isFinal) {
-                    finalTranscript += `${event.results[index][0].transcript} `;
+                    newFinal += `${event.results[index][0].transcript} `;
                 } else {
                     interimTranscript += event.results[index][0].transcript;
                 }
@@ -301,8 +304,8 @@ export default function ReceiverPortal({ user }) {
 
             setRequestPrompt((previous) => {
                 const base = previous.replace(/\u200b.*$/, '').trim();
-                const combined = `${base}${base ? ' ' : ''}${finalTranscript}`.trim();
-                return interimTranscript ? `${combined}\u200b${interimTranscript}` : combined;
+                const withNew = newFinal ? `${base}${base ? ' ' : ''}${newFinal}`.trim() : base;
+                return interimTranscript ? `${withNew}\u200b${interimTranscript}` : withNew;
             });
         };
 
@@ -367,6 +370,7 @@ export default function ReceiverPortal({ user }) {
 
     const speakPreview = async () => {
         if (!draftPreview) return;
+        if (isSpeaking) { stopSpeaking(); setIsSpeaking(false); return; }
         setIsSpeaking(true);
         try {
             await speakText(buildPreviewNarration(draftPreview, lang), lang);
@@ -407,7 +411,12 @@ export default function ReceiverPortal({ user }) {
                 </div>
                 {nextDelivery ? (
                     <div className="card" style={{ marginBottom: 24, padding: 24 }}>
-                        {minutesToArrival <= 15 && (
+                        {nextDelivery.status === 'ARRIVED' ? (
+                            <div style={{ marginBottom: 14, padding: '12px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, color: '#15803d', fontSize: 13, display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
+                                <span><strong>Payload has arrived.</strong> Please inspect the shipment and confirm receipt to finalize delivery.</span>
+                            </div>
+                        ) : minutesToArrival <= 15 && (
                             <div style={{ marginBottom: 14, padding: '10px 12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, color: '#9a3412', fontSize: 12, display: 'flex', gap: 8 }}>
                                 <AlertTriangle size={14} style={{ flexShrink: 0 }} />
                                 <span>Arrival alert: this shipment is within 15 minutes. Audio notification is enabled when supported.</span>
@@ -415,8 +424,8 @@ export default function ReceiverPortal({ user }) {
                         )}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
                             <div>
-                                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>NEXT ARRIVAL</div>
-                                <div className="mono" style={{ fontSize: 34, fontWeight: 700 }}>{String(Math.floor(minutesToArrival / 60)).padStart(2, '0')}:{String(minutesToArrival % 60).padStart(2, '0')}</div>
+                                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>{nextDelivery.status === 'ARRIVED' ? 'ARRIVED' : 'NEXT ARRIVAL'}</div>
+                                <div className="mono" style={{ fontSize: 34, fontWeight: 700 }}>{nextDelivery.status === 'ARRIVED' ? '00:00' : `${String(Math.floor(minutesToArrival / 60)).padStart(2, '0')}:${String(minutesToArrival % 60).padStart(2, '0')}`}</div>
                             </div>
                             <div style={{ flex: 1, minWidth: 240 }}>
                                 <div style={{ fontWeight: 600 }}>{nextDelivery.id} | {nextDelivery.payload}</div>
@@ -428,8 +437,8 @@ export default function ReceiverPortal({ user }) {
                                     <option value="fr">FR</option>
                                     <option value="iu">IU</option>
                                 </select>
-                                <button className="btn btn-primary" onClick={handleVoiceAlert} disabled={isSpeaking}>{isSpeaking ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Volume2 size={14} />}</button>
-                                <button className="btn btn-primary" onClick={() => updateDeliveryStatus(nextDelivery.id, 'DELIVERED')} disabled={nextDelivery.status === 'WEATHER_HOLD'}><CheckCircle2 size={14} /> Confirm Receipt</button>
+                                <button className="btn btn-primary" onClick={handleVoiceAlert}>{isSpeaking ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Volume2 size={14} />}</button>
+                                <button className="btn btn-primary" onClick={() => updateDeliveryStatus(nextDelivery.id, 'DELIVERED')} disabled={nextDelivery.status !== 'ARRIVED'}><CheckCircle2 size={14} /> Confirm Receipt</button>
                             </div>
                         </div>
                     </div>
@@ -546,7 +555,7 @@ export default function ReceiverPortal({ user }) {
                                     <button type="button" className="btn btn-primary" onClick={submitConfirmedRequest} disabled={!draftPreview.payload?.trim() || isSubmitting}>
                                         {isSubmitting ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Sending...</> : <><Send size={14} /> Confirm and Send to Dispatch</>}
                                     </button>
-                                    <button type="button" className="btn btn-secondary" onClick={speakPreview} disabled={isSpeaking}>
+                                    <button type="button" className="btn btn-secondary" onClick={speakPreview}>
                                         {isSpeaking ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Volume2 size={14} />} Read Back
                                     </button>
                                     <button type="button" className="btn btn-secondary" onClick={() => setDraftPreview(null)}>Edit Prompt</button>

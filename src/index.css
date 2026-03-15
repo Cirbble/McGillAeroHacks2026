@@ -284,12 +284,13 @@ select {
 .page-content {
   flex: 1;
   padding: 32px;
-  overflow-y: auto;
+  overflow: auto;
 }
 
 .page-inner {
   max-width: 1200px;
   margin: 0 auto;
+  min-width: 0;
 }
 
 /* ── Page Header ── */

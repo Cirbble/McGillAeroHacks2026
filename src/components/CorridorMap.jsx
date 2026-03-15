@@ -121,15 +121,6 @@ function getDroneMarkerStyle(drone, isSelected) {
     };
 }
 
-function getWeatherTone(condition) {
-    return {
-        CLEAR: '#2563eb',
-        WATCH: '#f59e0b',
-        UNSTABLE: '#ea580c',
-        SEVERE: '#dc2626',
-    }[condition] || '#94a3b8';
-}
-
 function buildWeatherOverlaySignature(weatherOverlay) {
     if (!weatherOverlay?.url || !weatherOverlay?.layers) return '';
     return [
@@ -153,8 +144,6 @@ export default function CorridorMapShared({
     onDroneClick = null,
     showStationaryDrones = true,
     weatherOverlay = null,
-    weatherStations = [],
-    showWeatherStations = false,
     highlightedDeliveryId = null,
 }) {
     const mapRef = useRef(null);
@@ -169,7 +158,6 @@ export default function CorridorMapShared({
         stations: null,
         drones: null,
         weather: null,
-        weatherStations: null,
     });
     const [mapReady, setMapReady] = useState(false);
 
@@ -211,7 +199,6 @@ export default function CorridorMapShared({
             layersRef.current.routes = L.layerGroup().addTo(map);
             layersRef.current.stations = L.layerGroup().addTo(map);
             layersRef.current.drones = L.layerGroup().addTo(map);
-            layersRef.current.weatherStations = L.layerGroup().addTo(map);
 
             if (typeof ResizeObserver !== 'undefined') {
                 resizeObserverRef.current = new ResizeObserver(() => {
@@ -247,7 +234,6 @@ export default function CorridorMapShared({
                 stations: null,
                 drones: null,
                 weather: null,
-                weatherStations: null,
             };
         };
     }, []);
@@ -297,7 +283,6 @@ export default function CorridorMapShared({
         layers.routes?.clearLayers();
         layers.stations?.clearLayers();
         layers.drones?.clearLayers();
-        layers.weatherStations?.clearLayers();
 
         if (showLines && lines.length > 0) {
             lines.forEach((line) => {
@@ -340,27 +325,6 @@ export default function CorridorMapShared({
                     }).addTo(layers.routes);
                 }
             });
-
-        if (showWeatherStations && weatherStations.length > 0) {
-            weatherStations
-                .filter((station) => Number.isFinite(Number(station.lat)) && Number.isFinite(Number(station.lng)))
-                .forEach((station) => {
-                    const tone = getWeatherTone(station.condition);
-                    const circle = L.circle([station.lat, station.lng], {
-                        radius: station.synthetic ? 26000 : 18000,
-                        color: tone,
-                        weight: station.synthetic ? 2 : 1.5,
-                        opacity: station.synthetic ? 0.7 : 0.45,
-                        fillColor: tone,
-                        fillOpacity: station.synthetic ? 0.12 : 0.05,
-                    }).addTo(layers.weatherStations);
-
-                    circle.bindTooltip(
-                        `<div style="font-family:Inter,sans-serif;font-size:11px;"><strong>${station.stationId}</strong>${station.synthetic ? '<br/><span style="color:#64748b">Synthetic northern probe</span>' : ''}<br/><span style="color:#64748b">${station.summary || station.weatherCodeLabel || station.condition}</span></div>`,
-                        { direction: 'top', offset: [0, -10] }
-                    );
-                });
-        }
 
         stations.forEach((station) => {
             const isActive = station.status === 'online';
@@ -426,8 +390,6 @@ export default function CorridorMapShared({
         stations,
         highlightedDeliveryId,
         weatherOverlay,
-        weatherStations,
-        showWeatherStations,
     ]);
 
     return <div ref={mapRef} style={{ width: '100%', height, minHeight: height, borderRadius: 8 }} />;

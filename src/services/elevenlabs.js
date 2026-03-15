@@ -2,12 +2,23 @@ const ELEVENLABS_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY;
 const VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
 
 let audioCtx = null;
+let activeSource = null;
+
+export function stopSpeaking() {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+    }
+    if (activeSource) {
+        try { activeSource.stop(); } catch { }
+        activeSource = null;
+    }
+}
 
 function getSpeechLocale(lang = 'en') {
     return {
         en: 'en-US',
         fr: 'fr-CA',
-        iu: 'iu-Cans-CA',
+        iu: 'en-US',
     }[lang] || 'en-US';
 }
 
@@ -64,10 +75,11 @@ export async function speakText(text, lang = 'en') {
         const source = audioCtx.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(audioCtx.destination);
+        activeSource = source;
         source.start(0);
 
         return await new Promise((resolve) => {
-            source.onended = resolve;
+            source.onended = () => { activeSource = null; resolve(); };
         });
     } catch {
         return speakWithBrowserVoices(text, lang);
@@ -82,7 +94,7 @@ export function generateArrivalAlert(delivery, lang = 'en') {
         return `Alerte. Livraison medicale dans environ ${safeMinutes} minutes. Chargement: ${delivery.payload}. Manifeste: ${delivery.id}. Preparez la reception.`;
     }
     if (lang === 'iu') {
-        return `Alert. Medical delivery arriving in about ${safeMinutes} minutes. Payload: ${delivery.payload}. Manifest: ${delivery.id}.`;
+        return `Tusaajiksaut. Aulajut nakuusimajut tikittialik ${safeMinutes} minutsini. Uumajuq: ${delivery.payload}. Manifest: ${delivery.id}. Pigiaqtitsigiaqullusi.`;
     }
     return `Alert. Medical delivery arriving in approximately ${safeMinutes} minutes. Payload: ${delivery.payload}. Manifest ID: ${delivery.id}. Please prepare for receipt.`;
 }
@@ -92,13 +104,13 @@ export function generateDispatchConfirmation(delivery, lang = 'en') {
         return `Manifeste ${delivery.id} cree. Chargement: ${delivery.payload}. Destination: ${delivery.destination}. Temps estime: ${delivery.estimatedTime || '2 heures'}. Le vol est actif si un drone est disponible.`;
     }
     if (lang === 'iu') {
-        return `Manifest ${delivery.id} created. Payload: ${delivery.payload}. Destination: ${delivery.destination}.`;
+        return `Manifest ${delivery.id} sanajausimajuq. Uumajuq: ${delivery.payload}. Tikiqqutaujuq: ${delivery.destination}. Kisiani ungataani: ${delivery.estimatedTime || 'magguk ikaarniq'}.`;
     }
     return `Manifest ${delivery.id} created. Payload: ${delivery.payload}. Destination: ${delivery.destination}. Estimated transit time: ${delivery.estimatedTime || '2 hours'}. The mission is active when fleet conditions allow.`;
 }
 
 export function generateSystemAlert(message, lang = 'en') {
     if (lang === 'fr') return `Alerte systeme. ${message}. Les vols actifs ont ete reevalues.`;
-    if (lang === 'iu') return `System alert. ${message}.`;
+    if (lang === 'iu') return `Nalunaiqsaut. ${message}. Tamarmik aulajut kiggatuinnaliqtut.`;
     return `System alert. ${message}. All active flights have been re-evaluated.`;
 }
