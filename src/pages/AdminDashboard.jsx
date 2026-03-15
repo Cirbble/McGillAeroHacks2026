@@ -647,8 +647,11 @@ export default function AdminDashboard() {
         addDrone,
         updateStation,
         updateDrone,
+        deleteStation,
+        deleteDrone,
         addLine,
         updateLine,
+        deleteLine,
         fetchOpsOverview,
         fetchPathInsight,
         rerouteDelivery,
@@ -862,6 +865,36 @@ export default function AdminDashboard() {
             setEditingLineId(null);
         } catch (err) {
             alert('Failed to save line: ' + err.message);
+        }
+    }
+
+    async function handleDeleteNode(station) {
+        if (!window.confirm(`Delete node "${station.id}"?`)) return;
+
+        try {
+            await deleteStation(station.id);
+        } catch (err) {
+            alert('Failed to delete node: ' + err.message);
+        }
+    }
+
+    async function handleDeleteDrone(drone) {
+        if (!window.confirm(`Delete drone "${drone.id}"?`)) return;
+
+        try {
+            await deleteDrone(drone.id);
+        } catch (err) {
+            alert('Failed to delete drone: ' + err.message);
+        }
+    }
+
+    async function handleDeleteLine(line) {
+        if (!window.confirm(`Delete line "${line.name}"?`)) return;
+
+        try {
+            await deleteLine(line.id);
+        } catch (err) {
+            alert('Failed to delete line: ' + err.message);
         }
     }
 
@@ -1394,7 +1427,10 @@ export default function AdminDashboard() {
                                                     <td className="mono">{current} / {s.max_drone_capacity}</td>
                                                     <td className="mono muted" style={{ fontSize: 11 }}>{s.lat?.toFixed(4)}, {s.lng?.toFixed(4)}</td>
                                                     <td style={{ textAlign: 'right' }}>
-                                                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditNode(s)}>Edit</button>
+                                                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                                            <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditNode(s)}>Edit</button>
+                                                            <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px', color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.25)' }} onClick={() => handleDeleteNode(s)}>Delete</button>
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             );
@@ -1452,6 +1488,7 @@ export default function AdminDashboard() {
                                                     <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                                                         <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => { setRelocatingDrone(d); setRelocateTarget(''); }}>Relocate</button>
                                                         <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditDrone(d)}>Edit</button>
+                                                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px', color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.25)' }} onClick={() => handleDeleteDrone(d)}>Delete</button>
                                                     </div>
                                                 </td>
                                             </tr>
@@ -1495,7 +1532,10 @@ export default function AdminDashboard() {
                                                 </td>
                                                 <td className="muted" style={{ fontSize: 12 }}>{l.stations.length > 0 ? l.stations.join(', ') : '—'}</td>
                                                 <td style={{ textAlign: 'right' }}>
-                                                    <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditLine(l)}>Edit</button>
+                                                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => openEditLine(l)}>Edit</button>
+                                                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px', color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.25)' }} onClick={() => handleDeleteLine(l)}>Delete</button>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         ))}

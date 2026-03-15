@@ -218,6 +218,42 @@ export const useStore = create((set, get) => ({
         return station;
     },
 
+    deleteStation: async (id) => {
+        const result = await requestJson(`/api/stations/${id}`, {
+            method: 'DELETE',
+        });
+
+        set((state) => ({
+            stations: state.stations.filter((station) => station.id !== id),
+            lines: Array.isArray(result.lines)
+                ? result.lines
+                : state.lines.map((line) => ({
+                    ...line,
+                    stations: line.stations.filter((stationId) => stationId !== id),
+                })),
+            drones: state.drones.map((drone) => {
+                const updated = result.updatedDrones?.find((entry) => entry.id === drone.id);
+                return updated || drone;
+            }),
+            opsOverview: state.opsOverview ? {
+                ...state.opsOverview,
+                stations: state.opsOverview.stations.filter((station) => station.id !== id),
+                lines: Array.isArray(result.lines)
+                    ? result.lines
+                    : state.opsOverview.lines.map((line) => ({
+                        ...line,
+                        stations: line.stations.filter((stationId) => stationId !== id),
+                    })),
+                drones: state.opsOverview.drones.map((drone) => {
+                    const updated = result.updatedDrones?.find((entry) => entry.id === drone.id);
+                    return updated || drone;
+                }),
+            } : state.opsOverview,
+        }));
+
+        return result;
+    },
+
     fetchDrones: async () => {
         const drones = await requestJson('/api/drones');
         set({ drones });
@@ -233,6 +269,22 @@ export const useStore = create((set, get) => ({
 
         set((state) => ({ drones: [...state.drones, drone] }));
         return drone;
+    },
+
+    deleteDrone: async (id) => {
+        const result = await requestJson(`/api/drones/${id}`, {
+            method: 'DELETE',
+        });
+
+        set((state) => ({
+            drones: state.drones.filter((drone) => drone.id !== id),
+            opsOverview: state.opsOverview ? {
+                ...state.opsOverview,
+                drones: state.opsOverview.drones.filter((drone) => drone.id !== id),
+            } : state.opsOverview,
+        }));
+
+        return result;
     },
 
     updateStation: async (id, updates) => {
@@ -264,6 +316,22 @@ export const useStore = create((set, get) => ({
 
         set((state) => ({ lines: [...state.lines, line] }));
         return line;
+    },
+
+    deleteLine: async (id) => {
+        const result = await requestJson(`/api/lines/${id}`, {
+            method: 'DELETE',
+        });
+
+        set((state) => ({
+            lines: state.lines.filter((line) => line.id !== id),
+            opsOverview: state.opsOverview ? {
+                ...state.opsOverview,
+                lines: state.opsOverview.lines.filter((line) => line.id !== id),
+            } : state.opsOverview,
+        }));
+
+        return result;
     },
 
     updateLine: async (id, updates) => {

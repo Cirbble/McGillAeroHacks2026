@@ -691,6 +691,19 @@ app.patch('/api/lines/:id/stations', async (req, res) => {
     }
 });
 
+app.delete('/api/lines/:id', async (req, res) => {
+    try {
+        const line = await Line.findOneAndDelete({ id: req.params.id });
+        if (!line) {
+            return res.status(404).json({ error: 'Line not found.' });
+        }
+
+        res.json({ success: true, id: req.params.id });
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
 app.get('/api/stations', async (req, res) => {
     try {
         const stations = await Station.find({}, '-_id -__v -createdAt -updatedAt');
@@ -718,6 +731,64 @@ app.patch('/api/stations/:id', async (req, res) => {
         fields.forEach(f => { if (req.body[f] !== undefined) station[f] = req.body[f]; });
         await station.save();
         res.json(serializeDoc(station));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+app.delete('/api/stations/:id', async (req, res) => {
+    try {
+        const stationId = req.params.id;
+        const station = await Station.findOneAndDelete({ id: stationId });
+        if (!station) {
+            return res.status(404).json({ error: 'Station not found.' });
+        }
+
+        await Line.updateMany(
+            { stations: stationId },
+            { $pull: { stations: stationId } }
+        );
+
+        const affectedDrones = await Drone.find({
+            $or: [
+                { location: stationId },
+                { target_location: stationId },
+                { origin_location: stationId },
+            ],
+        });
+
+        const updatedDrones = [];
+        for (const drone of affectedDrones) {
+            if (drone.location === stationId) {
+                drone.location = 'Unassigned';
+            }
+
+            if (drone.target_location === stationId) {
+                drone.target_location = null;
+                drone.time_of_arrival = null;
+                drone.speed = 0;
+                drone.assignment = null;
+                if (['on_route', 'relocating'].includes(drone.status)) {
+                    drone.status = 'ready';
+                }
+            }
+
+            if (drone.origin_location === stationId) {
+                drone.origin_location = null;
+            }
+
+            await drone.save();
+            updatedDrones.push(serializeDoc(drone));
+        }
+
+        const lines = await Line.find({}, '-_id -__v -createdAt -updatedAt');
+
+        res.json({
+            success: true,
+            id: stationId,
+            lines,
+            updatedDrones,
+        });
     } catch (err) {
         sendApiError(res, err);
     }
@@ -764,6 +835,19 @@ app.patch('/api/drones/:id', async (req, res) => {
         if (req.body.status && !['on_route', 'relocating'].includes(req.body.status)) { drone.target_location = null; drone.origin_location = null; drone.time_of_arrival = null; drone.speed = 0; }
         await drone.save();
         res.json(serializeDoc(drone));
+    } catch (err) {
+        sendApiError(res, err);
+    }
+});
+
+app.delete('/api/drones/:id', async (req, res) => {
+    try {
+        const drone = await Drone.findOneAndDelete({ id: req.params.id });
+        if (!drone) {
+            return res.status(404).json({ error: 'Drone not found.' });
+        }
+
+        res.json({ success: true, id: req.params.id });
     } catch (err) {
         sendApiError(res, err);
     }
