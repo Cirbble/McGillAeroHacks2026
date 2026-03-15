@@ -869,8 +869,6 @@ export default function AdminDashboard() {
     }
 
     async function handleDeleteNode(station) {
-        if (!window.confirm(`Delete node "${station.id}"?`)) return;
-
         try {
             await deleteStation(station.id);
         } catch (err) {
@@ -879,8 +877,6 @@ export default function AdminDashboard() {
     }
 
     async function handleDeleteDrone(drone) {
-        if (!window.confirm(`Delete drone "${drone.id}"?`)) return;
-
         try {
             await deleteDrone(drone.id);
         } catch (err) {
@@ -889,8 +885,6 @@ export default function AdminDashboard() {
     }
 
     async function handleDeleteLine(line) {
-        if (!window.confirm(`Delete line "${line.name}"?`)) return;
-
         try {
             await deleteLine(line.id);
         } catch (err) {
