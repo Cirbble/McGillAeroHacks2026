@@ -1209,9 +1209,13 @@ async function handleDroneReroute(req, res) {
         const currentRoute = Array.isArray(currentDrone.relocationRoute) ? currentDrone.relocationRoute : [];
         const routeChanged = JSON.stringify(planned.relocationRoute) !== JSON.stringify(currentRoute);
         if (!routeChanged) {
+            const projectedDrone = {
+                ...currentDrone,
+                ...planned,
+            };
             return res.json({
-                drone: currentDrone,
-                relocationReport: buildDroneRelocationReport(currentDrone, weatherByStation),
+                drone: projectedDrone,
+                relocationReport: buildDroneRelocationReport(projectedDrone, weatherByStation),
                 decision: {
                     status: planned.decisionStatus || 'rejected',
                     summary: planned.decisionSummary || 'Drone reroute rejected',

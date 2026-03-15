@@ -1027,12 +1027,27 @@ function buildDroneManualDecision({
     };
 }
 
-function buildRelocationEta(routeDistanceKm, speedKph = 80, routeStops = 0) {
-    if (Number.isFinite(Number(routeDistanceKm)) && Number(routeDistanceKm) > 0 && Number(speedKph) > 0) {
-        return Math.max(12, Math.round((Number(routeDistanceKm) / Number(speedKph)) * 60));
-    }
+function buildRelocationEtaProfile({
+    routeDistanceKm,
+    speedKph = 80,
+    routeStops = 0,
+    warnings = [],
+}) {
+    const numericSpeed = Number(speedKph) > 0 ? Number(speedKph) : 80;
+    const baseFlightMinutes = Number.isFinite(Number(routeDistanceKm)) && Number(routeDistanceKm) > 0
+        ? Math.max(12, Math.round((Number(routeDistanceKm) / numericSpeed) * 60))
+        : Math.max(14, Math.max(1, routeStops - 1) * 22);
+    const handoffDelayMinutes = Math.max(0, routeStops - 2) * 3;
+    const weatherDelayMinutes = estimateWeatherDelayMinutes(warnings);
+    const etaMinutes = Math.max(12, baseFlightMinutes + handoffDelayMinutes + weatherDelayMinutes);
 
-    return Math.max(14, Math.max(1, routeStops - 1) * 22);
+    return {
+        etaMinutes,
+        etaDisplay: formatEstimatedTime(etaMinutes),
+        baseFlightMinutes,
+        weatherDelayMinutes,
+        handoffDelayMinutes,
+    };
 }
 
 export function planDroneRelocation({
@@ -1144,7 +1159,12 @@ export function planDroneRelocation({
         currentLeg: 0,
     });
     const speed = Number(droneInput.speed || 80) || 80;
-    const etaMinutes = buildRelocationEta(routeDistance.routeDistanceKm, speed, activePath.length);
+    const etaProfile = buildRelocationEtaProfile({
+        routeDistanceKm: routeDistance.routeDistanceKm,
+        speedKph: speed,
+        routeStops: activePath.length,
+        warnings: routeAssessment.warnings,
+    });
 
     const relocationRecommendedAction = routeAssessment.routeState === 'BLOCKED'
         ? hasAlternateRoute
@@ -1176,7 +1196,7 @@ export function planDroneRelocation({
         origin_location: origin,
         target_location: destination,
         speed,
-        time_of_arrival: formatEstimatedTime(etaMinutes),
+        time_of_arrival: etaProfile.etaDisplay,
         assignment: null,
         relocationRoute: activePath,
         recommendedRelocationRoute: hasAlternateRoute && !shouldUseReroute ? alternatePath : activePath,
@@ -1217,6 +1237,12 @@ export function buildDroneRelocationReport(drone = null, weatherByStation = {}) 
     const coldestTempC = pathSnapshots.reduce((min, entry) => (
         Math.min(min, Number(entry.snapshot.tempC ?? Number.POSITIVE_INFINITY))
     ), Number.POSITIVE_INFINITY);
+    const etaProfile = buildRelocationEtaProfile({
+        routeDistanceKm: drone.relocationDistanceKm,
+        speedKph: drone.speed || 80,
+        routeStops: route.length,
+        warnings,
+    });
     const topWarning = warnings[0] || null;
     const routeState = drone.relocationRouteState || 'CLEAR';
     const statusTone = routeState === 'BLOCKED'
@@ -1261,6 +1287,13 @@ export function buildDroneRelocationReport(drone = null, weatherByStation = {}) 
         impactedStops: warnings.length,
         routeDistanceKm: drone.relocationDistanceKm ?? null,
         remainingDistanceKm: drone.relocationRemainingDistanceKm ?? drone.relocationDistanceKm ?? null,
+        etaMinutes: etaProfile.etaMinutes,
+        etaDisplay: drone.time_of_arrival || etaProfile.etaDisplay,
+        cruiseSpeedKph: Number(drone.speed || 80) || 80,
+        baseFlightMinutes: etaProfile.baseFlightMinutes,
+        weatherDelayMinutes: etaProfile.weatherDelayMinutes,
+        handoffDelayMinutes: etaProfile.handoffDelayMinutes,
+        weatherClear: warnings.length === 0,
         routePreview: route.length > 0 ? `${route[0]} → ${route[route.length - 1]}` : `${drone.origin_location} → ${drone.target_location}`,
         routeStops: route.length,
         rerouteActive,

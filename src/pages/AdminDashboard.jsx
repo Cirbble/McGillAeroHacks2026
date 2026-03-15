@@ -150,6 +150,30 @@ function formatMinutes(minutes) {
     return m > 0 ? `${h}h ${m}min` : `${h}h`;
 }
 
+function estimateWeatherDelayFromWarnings(warnings = []) {
+    return warnings.reduce((total, warning) => (
+        total + (warning.severity === 'SEVERE' ? 18 : warning.severity === 'UNSTABLE' ? 10 : 4)
+    ), 0);
+}
+
+function buildClientRelocationEtaProfile({ routeDistanceKm, speedKph = 80, routeStops = 0, warnings = [] }) {
+    const numericSpeed = Number(speedKph) > 0 ? Number(speedKph) : 80;
+    const baseFlightMinutes = Number.isFinite(Number(routeDistanceKm)) && Number(routeDistanceKm) > 0
+        ? Math.max(12, Math.round((Number(routeDistanceKm) / numericSpeed) * 60))
+        : Math.max(14, Math.max(1, routeStops - 1) * 22);
+    const handoffDelayMinutes = Math.max(0, routeStops - 2) * 3;
+    const weatherDelayMinutes = estimateWeatherDelayFromWarnings(warnings);
+    const etaMinutes = Math.max(12, baseFlightMinutes + handoffDelayMinutes + weatherDelayMinutes);
+
+    return {
+        etaMinutes,
+        etaDisplay: formatMinutes(etaMinutes),
+        baseFlightMinutes,
+        weatherDelayMinutes,
+        handoffDelayMinutes,
+    };
+}
+
 function formatDistanceKm(distanceKm) {
     const numericDistance = Number(distanceKm);
     if (!Number.isFinite(numericDistance)) return 'Distance unavailable';
@@ -280,6 +304,12 @@ function buildHydratedRelocationReport(drone, route, weatherStations = [], stati
     const manualRerouteSuggested = Array.isArray(drone.recommendedRelocationRoute)
         && drone.recommendedRelocationRoute.length > 1
         && JSON.stringify(drone.recommendedRelocationRoute) !== JSON.stringify(route);
+    const etaProfile = buildClientRelocationEtaProfile({
+        routeDistanceKm,
+        speedKph: drone.speed || 80,
+        routeStops: route.length,
+        warnings,
+    });
 
     return {
         droneId: drone.id,
@@ -302,6 +332,13 @@ function buildHydratedRelocationReport(drone, route, weatherStations = [], stati
         impactedStops: warnings.length,
         routeDistanceKm,
         remainingDistanceKm,
+        etaMinutes: etaProfile.etaMinutes,
+        etaDisplay: drone.time_of_arrival || etaProfile.etaDisplay,
+        cruiseSpeedKph: Number(drone.speed || 80) || 80,
+        baseFlightMinutes: etaProfile.baseFlightMinutes,
+        weatherDelayMinutes: etaProfile.weatherDelayMinutes,
+        handoffDelayMinutes: etaProfile.handoffDelayMinutes,
+        weatherClear: warnings.length === 0,
         routePreview: `${route[0]} → ${route[route.length - 1]}`,
         routeStops: route.length,
         rerouteActive: routeState === 'REROUTED',
@@ -329,6 +366,7 @@ function hydrateDroneForDisplay(drone, stations = [], lines = [], weatherStation
     return {
         ...drone,
         relocationRoute: fallbackRoute,
+        time_of_arrival: drone.time_of_arrival || relocationReport?.etaDisplay || null,
         relocationDistanceKm: drone.relocationDistanceKm ?? relocationReport?.routeDistanceKm ?? null,
         relocationRemainingDistanceKm: drone.relocationRemainingDistanceKm ?? relocationReport?.remainingDistanceKm ?? null,
         relocationWeatherState: drone.relocationWeatherState || relocationReport?.derivedWeatherState || 'CLEAR',
@@ -402,9 +440,34 @@ function formatWeatherUpdate(value) {
     }
 }
 
-const RADAR_WMS_URL = 'https://geo.weather.gc.ca/geomet';
+const GEOMET_WMS_URL = 'https://geo.weather.gc.ca/geomet';
 const RADAR_WMS_LAYER = 'RADAR_1KM_RRAI';
 const RADAR_WMS_STYLE = 'RADARURPPRECIPR14-LINEAR';
+const SATELLITE_WMS_LAYER = 'GOES-East_1km_VisibleIRSandwich-NightMicrophysicsIR';
+const OVERLAY_MODE_CONFIG = {
+    satellite: {
+        buttonLabel: 'Cloud satellite',
+        headerLabel: 'Live MSC GeoMet cloud satellite',
+        legendTitle: 'Cloud Satellite',
+        legendDescription: 'MSC GeoMet GOES-East cloud imagery over Quebec and the selected mission corridor.',
+        wms: {
+            layers: SATELLITE_WMS_LAYER,
+            styles: '',
+            opacity: 0.82,
+        },
+    },
+    radar: {
+        buttonLabel: 'Precipitation radar',
+        headerLabel: 'Live MSC GeoMet precipitation radar',
+        legendTitle: 'Precipitation Radar',
+        legendDescription: 'MSC GeoMet precipitation radar over the selected mission corridor. Cloud cover requires satellite imagery.',
+        wms: {
+            layers: RADAR_WMS_LAYER,
+            styles: RADAR_WMS_STYLE,
+            opacity: 0.58,
+        },
+    },
+};
 
 /* ── Leaflet Map Component ── */
 function CorridorMap({ stations = [], drones = [], deliveries = [], lines = [], height = 380, focusDrone = null }) {
@@ -723,12 +786,14 @@ function OverviewWeatherMap({
     highlightedDelivery = null,
     height = 380,
     showWeatherOverlay = true,
+    weatherOverlayMode = 'satellite',
 }) {
     const mapRef = useRef(null);
     const leafletRef = useRef(null);
     const mapInstance = useRef(null);
     const overlayGroupRef = useRef(null);
-    const radarLayerRef = useRef(null);
+    const weatherLayerRef = useRef(null);
+    const weatherLayerModeRef = useRef(null);
     const legendControlRef = useRef(null);
     const resizeHandleRef = useRef(null);
 
@@ -777,8 +842,8 @@ function OverviewWeatherMap({
                 legendControlRef.current.remove();
                 legendControlRef.current = null;
             }
-            if (radarLayerRef.current && mapInstance.current?.hasLayer(radarLayerRef.current)) {
-                mapInstance.current.removeLayer(radarLayerRef.current);
+            if (weatherLayerRef.current && mapInstance.current?.hasLayer(weatherLayerRef.current)) {
+                mapInstance.current.removeLayer(weatherLayerRef.current);
             }
             resizeObserver?.disconnect();
             if (mapInstance.current) {
@@ -787,7 +852,8 @@ function OverviewWeatherMap({
             }
             overlayGroupRef.current = null;
             leafletRef.current = null;
-            radarLayerRef.current = null;
+            weatherLayerRef.current = null;
+            weatherLayerModeRef.current = null;
         };
     }, []);
 
@@ -804,28 +870,38 @@ function OverviewWeatherMap({
             legendControlRef.current = null;
         }
 
-        const radarPane = map.getPane('radarPane') || map.createPane('radarPane');
-        radarPane.style.zIndex = 340;
+        const overlayConfig = OVERLAY_MODE_CONFIG[weatherOverlayMode] || OVERLAY_MODE_CONFIG.satellite;
+        const weatherPane = map.getPane('weatherPane') || map.createPane('weatherPane');
+        weatherPane.style.zIndex = 340;
 
         if (showWeatherOverlay) {
-            if (!radarLayerRef.current) {
-                radarLayerRef.current = L.tileLayer.wms(RADAR_WMS_URL, {
-                    pane: 'radarPane',
-                    layers: RADAR_WMS_LAYER,
-                    styles: RADAR_WMS_STYLE,
+            if (weatherLayerRef.current && weatherLayerModeRef.current !== weatherOverlayMode) {
+                if (map.hasLayer(weatherLayerRef.current)) {
+                    map.removeLayer(weatherLayerRef.current);
+                }
+                weatherLayerRef.current = null;
+                weatherLayerModeRef.current = null;
+            }
+
+            if (!weatherLayerRef.current) {
+                weatherLayerRef.current = L.tileLayer.wms(GEOMET_WMS_URL, {
+                    pane: 'weatherPane',
+                    layers: overlayConfig.wms.layers,
+                    styles: overlayConfig.wms.styles,
                     format: 'image/png',
                     transparent: true,
                     version: '1.3.0',
-                    opacity: 0.58,
+                    opacity: overlayConfig.wms.opacity,
                     crossOrigin: true,
                 });
+                weatherLayerModeRef.current = weatherOverlayMode;
             }
 
-            if (!map.hasLayer(radarLayerRef.current)) {
-                radarLayerRef.current.addTo(map);
+            if (!map.hasLayer(weatherLayerRef.current)) {
+                weatherLayerRef.current.addTo(map);
             }
-        } else if (radarLayerRef.current && map.hasLayer(radarLayerRef.current)) {
-            map.removeLayer(radarLayerRef.current);
+        } else if (weatherLayerRef.current && map.hasLayer(weatherLayerRef.current)) {
+            map.removeLayer(weatherLayerRef.current);
         }
 
         const stationsById = Object.fromEntries(stations.map((station) => [station.id, station]));
@@ -939,8 +1015,8 @@ function OverviewWeatherMap({
             } else {
                 div.style.cssText = 'background:rgba(255,255,255,0.92);border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-family:Inter,sans-serif;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,0.08);min-width:180px;';
                 div.innerHTML =
-                    '<div style="font-weight:700;margin-bottom:6px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">Precipitation Radar</div>' +
-                    '<div style="color:#0f172a;line-height:1.5;">MSC GeoMet precipitation radar over the selected mission corridor. Cloud cover requires satellite imagery.</div>' +
+                    `<div style="font-weight:700;margin-bottom:6px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;font-size:10px;">${overlayConfig.legendTitle}</div>` +
+                    `<div style="color:#0f172a;line-height:1.5;">${overlayConfig.legendDescription}</div>` +
                     `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;"><div style="width:22px;height:3px;background:${activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? '#10b981' : '#f59e0b'};border-radius:2px;flex-shrink:0;"></div><span style="color:#0f172a;">${activeDelivery?.routeState === 'REROUTED' || activeDelivery?.status === 'REROUTED' ? 'Manual reroute active' : 'Current mission path'}</span></div>`;
             }
 
@@ -974,6 +1050,7 @@ function OverviewWeatherMap({
         highlightedDelivery,
         lines,
         showWeatherOverlay,
+        weatherOverlayMode,
         stations,
         weatherStations,
     ]);
@@ -1066,6 +1143,7 @@ export default function AdminDashboard() {
     const [reroutingDroneId, setReroutingDroneId] = useState(null);
     const [droneRouteDecision, setDroneRouteDecision] = useState(null);
     const [showWeatherOverlay, setShowWeatherOverlay] = useState(false);
+    const [weatherOverlayMode, setWeatherOverlayMode] = useState('satellite');
     const [cortexMessages, setCortexMessages] = useState([]);
     const [cortexInput, setCortexInput] = useState('');
     const [cortexLoading, setCortexLoading] = useState(false);
@@ -1481,10 +1559,33 @@ export default function AdminDashboard() {
                 <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
                     <div className="card-header">
                         <span className="card-header-title"><Signal size={14} /> Selected Route Weather + Routing</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                                {showWeatherOverlay ? 'Live MSC GeoMet precipitation radar' : 'Base corridor map'}
+                                {showWeatherOverlay
+                                    ? (OVERLAY_MODE_CONFIG[weatherOverlayMode] || OVERLAY_MODE_CONFIG.satellite).headerLabel
+                                    : 'Base corridor map'}
                             </span>
+                            {showWeatherOverlay && (
+                                <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 999, overflow: 'hidden', background: 'var(--bg)' }}>
+                                    {Object.entries(OVERLAY_MODE_CONFIG).map(([mode, config]) => (
+                                        <button
+                                            key={mode}
+                                            type="button"
+                                            onClick={() => setWeatherOverlayMode(mode)}
+                                            style={{
+                                                padding: '6px 10px',
+                                                fontSize: 11,
+                                                fontWeight: 600,
+                                                color: weatherOverlayMode === mode ? 'white' : 'var(--text-secondary)',
+                                                background: weatherOverlayMode === mode ? 'var(--text)' : 'transparent',
+                                                border: 'none',
+                                            }}
+                                        >
+                                            {config.buttonLabel}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
                             <button
                                 type="button"
                                 className="btn btn-secondary"
@@ -1504,6 +1605,7 @@ export default function AdminDashboard() {
                         weatherStations={weatherStations}
                         highlightedDelivery={selectedDelivery}
                         showWeatherOverlay={showWeatherOverlay}
+                        weatherOverlayMode={weatherOverlayMode}
                     />
                 </div>
 
@@ -1835,8 +1937,10 @@ export default function AdminDashboard() {
                                         </div>
                                         <div style={{ padding: '12px 14px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg)' }}>
                                             <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>ETA</div>
-                                            <div className="mono" style={{ fontSize: 18, fontWeight: 700 }}>{selectedDrone.time_of_arrival || '—'}</div>
-                                            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>{selectedDrone.speed || 80} km/h cruise</div>
+                                            <div className="mono" style={{ fontSize: 18, fontWeight: 700 }}>{selectedDroneRelocationReport.etaDisplay || selectedDrone.time_of_arrival || '—'}</div>
+                                            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                                                {selectedDroneRelocationReport.cruiseSpeedKph || selectedDrone.speed || 80} km/h cruise
+                                            </div>
                                         </div>
                                         <div style={{ padding: '12px 14px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg)' }}>
                                             <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Weather</div>
@@ -1862,6 +1966,21 @@ export default function AdminDashboard() {
                                             </div>
                                         </div>
                                         <div style={{ padding: '14px 16px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg)', display: 'grid', gap: 10 }}>
+                                            <div>
+                                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>ETA model</div>
+                                                <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>
+                                                    Estimated arrival: {selectedDroneRelocationReport.etaDisplay || selectedDrone.time_of_arrival || 'Unavailable'}.
+                                                    {' '}
+                                                    Cruise speed: {selectedDroneRelocationReport.cruiseSpeedKph || selectedDrone.speed || 80} km/h.
+                                                </div>
+                                                <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.6, color: 'var(--text-tertiary)' }}>
+                                                    Base flight {Number.isFinite(selectedDroneRelocationReport.baseFlightMinutes) ? formatMinutes(selectedDroneRelocationReport.baseFlightMinutes) : 'unavailable'}
+                                                    {' · '}
+                                                    Weather {selectedDroneRelocationReport.weatherDelayMinutes > 0 ? `+${formatMinutes(selectedDroneRelocationReport.weatherDelayMinutes)}` : 'clear'}
+                                                    {' · '}
+                                                    Handoffs {selectedDroneRelocationReport.handoffDelayMinutes > 0 ? `+${formatMinutes(selectedDroneRelocationReport.handoffDelayMinutes)}` : 'none'}
+                                                </div>
+                                            </div>
                                             <div>
                                                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 4 }}>Weather summary</div>
                                                 <div style={{ fontSize: 12, lineHeight: 1.7, color: 'var(--text-secondary)' }}>{selectedDroneRelocationReport.summary}</div>
